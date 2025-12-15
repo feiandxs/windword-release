@@ -87,6 +87,12 @@ jobs:
           set -euxo pipefail
           pnpm config set store-dir ${PNPM_STORE_PATH} --global
 
+      - name: Use hoisted node linker to shorten paths
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm config set node-linker hoisted --global
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
