@@ -66,6 +66,10 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Prepare pnpm store dir
+        shell: bash
+        run: mkdir -p "${PNPM_STORE_PATH}"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
