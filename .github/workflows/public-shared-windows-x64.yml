@@ -92,6 +92,9 @@ jobs:
         run: |
           set -euxo pipefail
           pnpm config set node-linker hoisted --global
+          pnpm config set ignore-scripts false --global
+          echo "NPM_CONFIG_IGNORE_SCRIPTS=false" >> "$GITHUB_ENV"
+          echo "PNPM_IGNORE_SCRIPTS=false" >> "$GITHUB_ENV"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -106,11 +109,17 @@ jobs:
           set -euxo pipefail
           pnpm config set store-dir ${PNPM_STORE_PATH} --global
 
-      - name: Install dependencies
+      - name: Install dependencies (workspace root)
         shell: bash
         run: |
           set -euxo pipefail
           pnpm install --frozen-lockfile --config.store-dir=${PNPM_STORE_PATH} --ignore-scripts=false
+
+      - name: Ensure desktop package deps installed
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm --filter @windword/desktop install --config.store-dir=${PNPM_STORE_PATH} --ignore-scripts=false --no-frozen-lockfile
 
       - name: Verify electron is installed
         shell: bash
