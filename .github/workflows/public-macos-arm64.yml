@@ -1,45 +1,10 @@
-name: Public macOS arm64 Build
+name: Deprecated Public macOS arm64
 
 on:
-  repository_dispatch:
-    types: [public-macos-arm64]
-  workflow_dispatch:
-    inputs:
-      ref:
-        description: Branch, tag, or SHA to build (optional)
-        required: false
-        type: string
-      include_model:
-        description: Bundle SenseVoice model
-        required: false
-        type: boolean
-        default: false
-      include_metadata:
-        description: Include electron-builder metadata/blockmap
-        required: false
-        type: boolean
-        default: true
-
-env:
-  DEFAULT_REF: refs/heads/develop
+  workflow_dispatch: {}
 
 jobs:
-  prepare:
-    uses: ./.github/workflows/public-shared-prepare.yml
-    with:
-      runner: ubuntu-latest
-      target_ref: ${{ github.event.client_payload.ref || inputs.ref || 'refs/heads/develop' }}
-      target_sha: ${{ github.event.client_payload.sha || '' }}
-
-  macos-arm64:
-    needs: prepare
-    uses: ./.github/workflows/public-shared-macos-arm64.yml
-    with:
-      runner: macos-26
-      checkout_ref: ${{ needs.prepare.outputs.checkout_ref }}
-      short_sha: ${{ needs.prepare.outputs.short_sha }}
-      include_metadata: ${{ inputs.include_metadata }}
-      include_sensevoice_model: ${{ inputs.include_model }}
-      artifact_name: macos-arm64-test
-      artifact_filename_suffix: ${{ inputs.include_model && 'with-model' || '' }}
-    secrets: inherit
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Deprecated; use public-desktop-dev.yml"
