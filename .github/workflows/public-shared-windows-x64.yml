@@ -1,122 +1,150 @@
-name: Public Shared Windows x64 Build
+name: Shared Windows x64 Build
 
 on:
   workflow_call:
     inputs:
       runner:
-        description: Runner label for Windows build
-        required: true
-        type: string
-      checkout_ref:
-        description: Ref to check out (from prepare)
+        description: Label or expression for the runner to execute on
         required: true
         type: string
       short_sha:
-        description: Short SHA for artifact naming
+        description: Short SHA for tagging build artifacts
         required: true
         type: string
-      include_metadata:
-        description: Include electron-builder metadata files
-        required: false
+      app_dir:
+        description: Path to the Electron app directory
+        required: true
+        type: string
+      artifact_suffix:
+        description: Suffix appended to produced artifact filenames
+        required: true
+        type: string
+      electron_builder_args:
+        description: Arguments passed to electron-builder
+        required: true
+        type: string
+      node_version:
+        description: Node.js version to install
+        required: true
+        type: string
+      pnpm_version:
+        description: pnpm version to install
+        required: true
+        type: string
+      pnpm_store_path:
+        description: Path for pnpm store
+        required: true
         type: string
       artifact_name:
-        description: Artifact name for upload
-        required: false
-        type: string
-      artifact_filename_suffix:
-        description: Optional suffix appended before extension
-        required: false
-        type: string
-      include_sensevoice_model:
-        description: Bundle SenseVoice model
-        required: false
+        description: Name used when uploading build artifacts
+        required: true
         type: string
       preserve_original_filenames:
         description: Copy packaged artifacts using their original filenames
         required: false
         type: string
-    secrets:
-      PRIVATE_REPO_PAT:
-        required: true
+      include_metadata:
+        description: Include electron-builder metadata files in the uploaded artifact
+        required: false
+        type: string
+      override_version:
+        description: Semver to force into package metadata before building
+        required: false
+        type: string
+      include_sensevoice_model:
+        description: Set to true to bundle pre-downloaded SenseVoice model into the build
+        required: false
+        type: string
+      artifact_filename_suffix:
+        description: Optional suffix appended to the original artifact filename (before extension) when preserving filenames
+        required: false
+        type: string
 
 permissions:
   contents: read
 
-env:
-  APP_DIR: apps/windword-desktop
-  PNPM_VERSION: 9
-  PNPM_STORE_PATH: ~/.pnpm-store
-  NODE_VERSION: 20
-
 jobs:
   build:
     runs-on: ${{ inputs.runner }}
-    permissions:
-      contents: read
     env:
-      CI: true
-      INCLUDE_METADATA: ${{ inputs.include_metadata || 'true' }}
-      ARTIFACT_NAME: ${{ inputs.artifact_name || 'windows-x64-dev' }}
-      ARTIFACT_FILENAME_SUFFIX: ${{ inputs.artifact_filename_suffix }}
-      INCLUDE_SENSEVOICE_MODEL: ${{ inputs.include_sensevoice_model }}
+      PNPM_HOME: ~/.pnpm
+      PNPM_STORE_PATH: ${{ inputs.pnpm_store_path }}
+      SHORT_SHA: ${{ inputs.short_sha }}
+      ARTIFACT_SUFFIX: ${{ inputs.artifact_suffix }}
+      ELECTRON_BUILDER_ARGS: ${{ inputs.electron_builder_args }}
+      APP_DIR: ${{ inputs.app_dir }}
+      ARTIFACT_NAME: ${{ inputs.artifact_name }}
       PRESERVE_ORIGINAL_FILENAMES: ${{ inputs.preserve_original_filenames }}
+      INCLUDE_METADATA: ${{ inputs.include_metadata }}
+      OVERRIDE_VERSION: ${{ inputs.override_version }}
+      INCLUDE_SENSEVOICE_MODEL: ${{ inputs.include_sensevoice_model }}
+      ARTIFACT_FILENAME_SUFFIX: ${{ inputs.artifact_filename_suffix }}
+      NPM_CONFIG_IGNORE_SCRIPTS: 'false'
+      PNPM_IGNORE_SCRIPTS: 'false'
     steps:
-      - name: Checkout private repo
+      - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          repository: feiandxs/windword
-          ref: ${{ inputs.checkout_ref }}
-          token: ${{ secrets.PRIVATE_REPO_PAT }}
-          fetch-depth: 0
-          persist-credentials: false
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v3
         with:
-          version: ${{ env.PNPM_VERSION }}
+          version: ${{ inputs.pnpm_version }}
           run_install: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: ${{ inputs.node_version }}
 
-      - name: Configure pnpm store and linker
+      - name: Override package version
+        if: inputs.override_version != ''
         shell: bash
         run: |
           set -euxo pipefail
-          pnpm config set store-dir ${PNPM_STORE_PATH} --global
-          pnpm config set node-linker hoisted --global
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const version = process.env.OVERRIDE_VERSION;
+          if (!version) {
+            process.exit(0);
+          }
+          const pkgPath = path.join(process.cwd(), process.env.APP_DIR, 'package.json');
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          pkg.version = version;
+          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+          NODE
 
       - name: Install dependencies
         shell: bash
         run: |
           set -euxo pipefail
-          pnpm env use --global ${{ env.NODE_VERSION }}
+          pnpm env use --global ${{ inputs.node_version }}
           pnpm --version
           pnpm install --frozen-lockfile --config.store-dir=${PNPM_STORE_PATH}
 
-      - name: Build desktop (windows x64)
+      - name: Build project
         shell: bash
-        env:
-          USE_SYSTEM_NSIS: 'true'
         run: |
+          set -euxo pipefail
           pnpm --filter @windword/desktop build
-          pnpm --filter @windword/desktop exec electron-builder --win nsis --x64
 
       - name: Prepare bundled SenseVoice model
         if: env.INCLUDE_SENSEVOICE_MODEL == 'true'
         shell: bash
-        run: pnpm --filter @windword/desktop prepare:sensevoice-model
-
-      - name: Package artifacts
-        shell: bash
-        env:
-          SHORT_SHA: ${{ inputs.short_sha }}
         run: |
           set -euxo pipefail
+          pnpm --filter @windword/desktop prepare:sensevoice-model
+
+      - name: Package artifacts
+        env:
+          USE_SYSTEM_NSIS: 'true'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm --filter @windword/desktop exec electron-builder ${ELECTRON_BUILDER_ARGS}
           mkdir -p release
           APP_DIST="${APP_DIR}/dist"
+          EFFECTIVE_SHORT_SHA=${SHORT_SHA:-${GITHUB_SHA::7}}
           installer=$(find "$APP_DIST" -maxdepth 1 -type f -name '*.exe' -print -quit || true)
           if [ -z "$installer" ]; then
             echo 'No Windows installer produced by electron-builder' >&2
@@ -131,7 +159,7 @@ jobs:
             fi
             cp "$installer" "release/${base_name}"
           else
-            cp "$installer" "release/windword-develop-${SHORT_SHA}-${ARTIFACT_NAME}.exe"
+            cp "$installer" "release/windword-develop-${EFFECTIVE_SHORT_SHA}-${ARTIFACT_SUFFIX}.exe"
           fi
           if [ "${INCLUDE_METADATA}" = "true" ]; then
             METADATA_FILE=$(find "$APP_DIST" -maxdepth 1 -type f -name 'latest.yml' -print -quit || true)
@@ -143,8 +171,8 @@ jobs:
             find "$APP_DIST" -maxdepth 1 -type f -name '*.blockmap' -exec cp {} release/ \;
           fi
 
-      - name: Upload artifact
+      - name: Upload Windows x64 artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ARTIFACT_NAME }}
+          name: ${{ inputs.artifact_name }}
           path: release
