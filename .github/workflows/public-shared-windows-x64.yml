@@ -81,6 +81,13 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Configure pnpm store and linker
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm config set store-dir ${PNPM_STORE_PATH} --global
+          pnpm config set node-linker hoisted --global
+
       - name: Install dependencies
         shell: bash
         run: |
@@ -91,6 +98,8 @@ jobs:
 
       - name: Build desktop (windows x64)
         shell: bash
+        env:
+          USE_SYSTEM_NSIS: 'true'
         run: |
           pnpm --filter @windword/desktop build
           pnpm --filter @windword/desktop exec electron-builder --win nsis --x64
