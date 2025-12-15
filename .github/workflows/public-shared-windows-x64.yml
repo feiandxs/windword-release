@@ -1,0 +1,150 @@
+name: Public Shared Windows x64 Build
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: Runner label for Windows build
+        required: true
+        type: string
+      checkout_ref:
+        description: Ref to check out (from prepare)
+        required: true
+        type: string
+      short_sha:
+        description: Short SHA for artifact naming
+        required: true
+        type: string
+      include_metadata:
+        description: Include electron-builder metadata files
+        required: false
+        type: string
+      artifact_name:
+        description: Artifact name for upload
+        required: false
+        type: string
+      artifact_filename_suffix:
+        description: Optional suffix appended before extension
+        required: false
+        type: string
+      include_sensevoice_model:
+        description: Bundle SenseVoice model
+        required: false
+        type: string
+      preserve_original_filenames:
+        description: Copy packaged artifacts using their original filenames
+        required: false
+        type: string
+    secrets:
+      PRIVATE_REPO_PAT:
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  APP_DIR: apps/windword-desktop
+  PNPM_VERSION: 9
+  PNPM_STORE_PATH: ~/.pnpm-store
+  NODE_VERSION: 20
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+    env:
+      CI: true
+      INCLUDE_METADATA: ${{ inputs.include_metadata || 'true' }}
+      ARTIFACT_NAME: ${{ inputs.artifact_name || 'windows-x64-dev' }}
+      ARTIFACT_FILENAME_SUFFIX: ${{ inputs.artifact_filename_suffix }}
+      INCLUDE_SENSEVOICE_MODEL: ${{ inputs.include_sensevoice_model }}
+      PRESERVE_ORIGINAL_FILENAMES: ${{ inputs.preserve_original_filenames }}
+    steps:
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: feiandxs/windword
+          ref: ${{ inputs.checkout_ref }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Prepare pnpm store dir
+        shell: bash
+        run: mkdir -p "${PNPM_STORE_PATH}"
+
+      - name: Enable pnpm via corepack
+        shell: bash
+        run: |
+          corepack enable
+          corepack prepare pnpm@${PNPM_VERSION} --activate
+          pnpm --version
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Configure pnpm store dir
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm config set store-dir ${PNPM_STORE_PATH} --global
+
+      - name: Install dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile --config.store-dir=${PNPM_STORE_PATH}
+
+      - name: Build desktop (windows x64)
+        shell: bash
+        run: |
+          pnpm --filter @windword/desktop build
+          pnpm --filter @windword/desktop exec electron-builder --win nsis --x64
+
+      - name: Prepare bundled SenseVoice model
+        if: env.INCLUDE_SENSEVOICE_MODEL == 'true'
+        shell: bash
+        run: pnpm --filter @windword/desktop prepare:sensevoice-model
+
+      - name: Package artifacts
+        shell: bash
+        env:
+          SHORT_SHA: ${{ inputs.short_sha }}
+        run: |
+          set -euxo pipefail
+          mkdir -p release
+          APP_DIST="${APP_DIR}/dist"
+          installer=$(find "$APP_DIST" -maxdepth 1 -type f -name '*.exe' -print -quit || true)
+          if [ -z "$installer" ]; then
+            echo 'No Windows installer produced by electron-builder' >&2
+            exit 1
+          fi
+          if [ "${PRESERVE_ORIGINAL_FILENAMES}" = "true" ]; then
+            base_name="$(basename "$installer")"
+            if [ -n "${ARTIFACT_FILENAME_SUFFIX}" ]; then
+              ext="${base_name##*.}"
+              stem="${base_name%.*}"
+              base_name="${stem}-${ARTIFACT_FILENAME_SUFFIX}.${ext}"
+            fi
+            cp "$installer" "release/${base_name}"
+          else
+            cp "$installer" "release/windword-develop-${SHORT_SHA}-${ARTIFACT_NAME}.exe"
+          fi
+          if [ "${INCLUDE_METADATA}" = "true" ]; then
+            METADATA_FILE=$(find "$APP_DIST" -maxdepth 1 -type f -name 'latest.yml' -print -quit || true)
+            if [ -z "$METADATA_FILE" ]; then
+              echo 'latest.yml metadata was not produced' >&2
+              exit 1
+            fi
+            cp "$METADATA_FILE" "release/$(basename "$METADATA_FILE")"
+            find "$APP_DIST" -maxdepth 1 -type f -name '*.blockmap' -exec cp {} release/ \;
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: release
