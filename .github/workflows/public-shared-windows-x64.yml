@@ -108,7 +108,15 @@ jobs:
 
       - name: Install dependencies
         shell: bash
-        run: pnpm install --frozen-lockfile --config.store-dir=${PNPM_STORE_PATH}
+        run: |
+          set -euxo pipefail
+          pnpm install --frozen-lockfile --config.store-dir=${PNPM_STORE_PATH} --ignore-scripts=false
+
+      - name: Verify electron is installed
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm --filter @windword/desktop exec node -e "console.log(require('electron/package.json').version)"
 
       - name: Build desktop (windows x64)
         shell: bash
