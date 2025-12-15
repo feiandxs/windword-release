@@ -1,0 +1,53 @@
+name: Public Shared Prepare
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        description: Runner label for prepare job
+        required: true
+        type: string
+      target_ref:
+        description: Git ref (branch/tag/SHA) to build
+        required: false
+        type: string
+      target_sha:
+        description: Optional SHA override for short SHA output
+        required: false
+        type: string
+    outputs:
+      checkout_ref:
+        description: Ref to check out in downstream jobs
+        value: ${{ jobs.prepare.outputs.checkout_ref }}
+      short_sha:
+        description: Short SHA for artifact naming
+        value: ${{ jobs.prepare.outputs.short_sha }}
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ${{ inputs.runner }}
+    outputs:
+      checkout_ref: ${{ steps.meta.outputs.checkout_ref }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+    steps:
+      - name: Resolve ref and sha
+        id: meta
+        env:
+          TARGET_REF: ${{ inputs.target_ref }}
+          TARGET_SHA: ${{ inputs.target_sha }}
+        run: |
+          set -euo pipefail
+          ref="$TARGET_REF"
+          if [ -z "$ref" ]; then
+            ref="refs/heads/develop"
+          fi
+          sha="$TARGET_SHA"
+          if [ -z "$sha" ]; then
+            sha="$GITHUB_SHA"
+          fi
+          short="${sha:0:7}"
+          echo "checkout_ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short" >> "$GITHUB_OUTPUT"
