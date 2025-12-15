@@ -35,7 +35,7 @@ jobs:
     needs: prepare
     uses: ./.github/workflows/public-shared-macos-arm64.yml
     with:
-      runner: macos-latest
+      runner: macos-26
       checkout_ref: ${{ needs.prepare.outputs.checkout_ref }}
       short_sha: ${{ needs.prepare.outputs.short_sha }}
       include_metadata: ${{ inputs.include_metadata }}
