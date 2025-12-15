@@ -81,6 +81,12 @@ jobs:
           corepack prepare pnpm@${PNPM_VERSION} --activate
           pnpm --version
 
+      - name: Configure pnpm store dir
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm config set store-dir ${PNPM_STORE_PATH} --global
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
