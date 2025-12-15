@@ -28,7 +28,7 @@ jobs:
     uses: ./.github/workflows/public-shared-prepare.yml
     with:
       runner: ubuntu-latest
-      target_ref: ${{ github.event.client_payload.ref || inputs.ref || env.DEFAULT_REF }}
+      target_ref: ${{ github.event.client_payload.ref || inputs.ref || 'refs/heads/develop' }}
       target_sha: ${{ github.event.client_payload.sha || '' }}
 
   macos-arm64:
