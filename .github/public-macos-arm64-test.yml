@@ -1,0 +1,63 @@
+name: Public macOS arm64 Test Build
+
+on:
+  repository_dispatch:
+    types: [public-macos-arm64-test]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: false
+      CI: true
+    steps:
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: feiandxs/windword
+          ref: ${{ github.event.client_payload.ref || 'refs/heads/develop' }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --config.store-dir=~/.pnpm-store
+
+      - name: Build Apple Speech CLI
+        run: pnpm build:apple-speech-cli
+
+      - name: Build Apple Audio Mute CLI
+        run: pnpm build:apple-audio-mute-cli
+
+      - name: Build Apple Audio Device CLI
+        run: pnpm build:apple-audio-device-cli
+
+      - name: Build Apple Selection Detector CLI
+        run: pnpm build:apple-selection-detector-cli
+
+      - name: Build desktop (mac arm64)
+        run: |
+          pnpm --filter @windword/desktop build
+          pnpm --filter @windword/desktop exec electron-builder --mac zip --arm64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-test
+          path: apps/windword-desktop/dist/*.zip
