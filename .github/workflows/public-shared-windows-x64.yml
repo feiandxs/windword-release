@@ -126,7 +126,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          pnpm --filter @windword/desktop exec electron-builder install-app-deps --platform=win32 --arch=x64 --electron-version=38.1.2
+          pnpm --filter @windword/desktop exec electron-builder install-app-deps --platform=win32 --arch=x64
 
       - name: Verify electron is installed
         shell: bash
