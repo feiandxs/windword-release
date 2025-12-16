@@ -76,7 +76,7 @@ jobs:
     env:
       PNPM_HOME: ~/.pnpm
       PNPM_STORE_PATH: ${{ inputs.pnpm_store_path }}
-      PNPM_VIRTUAL_STORE_DIR: .pnpm
+      PNPM_VIRTUAL_STORE_DIR: ../.pnpm
       SHORT_SHA: ${{ inputs.short_sha }}
       ARTIFACT_SUFFIX: ${{ inputs.artifact_suffix }}
       ELECTRON_BUILDER_ARGS: ${{ inputs.electron_builder_args }}
@@ -99,6 +99,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Map workspace to short drive
+        shell: pwsh
+        run: |
+          $drive = "W:"
+          try { subst $drive /d | Out-Null } catch {}
+          subst $drive $env:GITHUB_WORKSPACE
+          "WW_WORKSPACE=$drive\\" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Set up pnpm
         uses: pnpm/action-setup@v3
         with:
@@ -112,11 +120,13 @@ jobs:
 
       - name: Prepare pnpm store dir
         shell: bash
+        working-directory: ${{ env.WW_WORKSPACE }}
         run: mkdir -p "${PNPM_STORE_PATH}"
 
       - name: Override package version
         if: inputs.override_version != ''
         shell: bash
+        working-directory: ${{ env.WW_WORKSPACE }}
         run: |
           set -euxo pipefail
           node <<'NODE'
@@ -134,6 +144,7 @@ jobs:
 
       - name: Install dependencies
         shell: bash
+        working-directory: ${{ env.WW_WORKSPACE }}
         run: |
           set -euxo pipefail
           pnpm env use --global ${{ inputs.node_version }}
@@ -142,6 +153,7 @@ jobs:
 
       - name: Build project
         shell: bash
+        working-directory: ${{ env.WW_WORKSPACE }}
         run: |
           set -euxo pipefail
           pnpm --filter @windword/desktop build
@@ -149,6 +161,7 @@ jobs:
       - name: Prepare bundled SenseVoice model
         if: env.INCLUDE_SENSEVOICE_MODEL == 'true'
         shell: bash
+        working-directory: ${{ env.WW_WORKSPACE }}
         run: |
           set -euxo pipefail
           pnpm --filter @windword/desktop prepare:sensevoice-model
@@ -157,6 +170,7 @@ jobs:
         env:
           USE_SYSTEM_NSIS: 'true'
         shell: bash
+        working-directory: ${{ env.WW_WORKSPACE }}
         run: |
           set -euxo pipefail
           pnpm --filter @windword/desktop exec electron-builder ${ELECTRON_BUILDER_ARGS}
