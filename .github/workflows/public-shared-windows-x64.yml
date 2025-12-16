@@ -76,6 +76,7 @@ jobs:
     env:
       PNPM_HOME: ~/.pnpm
       PNPM_STORE_PATH: ${{ inputs.pnpm_store_path }}
+      PNPM_VIRTUAL_STORE_DIR: .pnpm
       SHORT_SHA: ${{ inputs.short_sha }}
       ARTIFACT_SUFFIX: ${{ inputs.artifact_suffix }}
       ELECTRON_BUILDER_ARGS: ${{ inputs.electron_builder_args }}
@@ -137,7 +138,7 @@ jobs:
           set -euxo pipefail
           pnpm env use --global ${{ inputs.node_version }}
           pnpm --version
-          pnpm install --frozen-lockfile --config.store-dir=${PNPM_STORE_PATH}
+          pnpm install --frozen-lockfile --config.store-dir=${PNPM_STORE_PATH} --config.virtual-store-dir=${PNPM_VIRTUAL_STORE_DIR}
 
       - name: Build project
         shell: bash
