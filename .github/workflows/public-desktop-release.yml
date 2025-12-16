@@ -1,0 +1,346 @@
+name: Public Desktop Release Build
+
+on:
+  repository_dispatch:
+    types: [public-desktop-release]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag name to build and publish (e.g. v1.2.3)
+        required: true
+        type: string
+      include_metadata:
+        description: Include electron-builder metadata/blockmap
+        required: false
+        type: boolean
+        default: true
+      draft:
+        description: Create release as draft
+        required: false
+        type: boolean
+        default: false
+      prerelease:
+        description: Mark release as prerelease
+        required: false
+        type: boolean
+        default: false
+      enable_signing:
+        description: Enable macOS code signing/notarization (requires secrets)
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      checkout_ref: ${{ steps.meta.outputs.checkout_ref }}
+      tag_name: ${{ steps.meta.outputs.tag_name }}
+      semver: ${{ steps.meta.outputs.semver }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+      include_metadata: ${{ steps.meta.outputs.include_metadata }}
+      draft: ${{ steps.meta.outputs.draft }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      enable_signing: ${{ steps.meta.outputs.enable_signing }}
+      source_repo: ${{ steps.meta.outputs.source_repo }}
+      source_ref: ${{ steps.meta.outputs.source_ref }}
+      source_sha: ${{ steps.meta.outputs.source_sha }}
+    steps:
+      - name: Resolve release metadata
+        id: meta
+        env:
+          EVENT_REPO: ${{ github.event.client_payload.repo }}
+          EVENT_REF: ${{ github.event.client_payload.ref }}
+          EVENT_SHA: ${{ github.event.client_payload.sha }}
+          EVENT_TAG: ${{ github.event.client_payload.tag }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_INCLUDE_METADATA: ${{ inputs.include_metadata }}
+          INPUT_DRAFT: ${{ inputs.draft }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+          INPUT_ENABLE_SIGNING: ${{ inputs.enable_signing }}
+        run: |
+          set -euo pipefail
+
+          ref="${EVENT_REF:-}"
+          if [ -z "$ref" ]; then
+            if [ -n "${INPUT_TAG:-}" ]; then
+              ref="refs/tags/${INPUT_TAG}"
+            fi
+          fi
+          if [ -z "$ref" ]; then
+            echo "Missing ref; only tag-based releases are supported" >&2
+            exit 1
+          fi
+          if [[ "$ref" != refs/tags/* ]]; then
+            echo "Release builds must use a tag ref (got: $ref)" >&2
+            exit 1
+          fi
+
+          tag="${EVENT_TAG:-${ref#refs/tags/}}"
+          if [ -z "$tag" ]; then
+            echo "Unable to resolve tag name from ref: $ref" >&2
+            exit 1
+          fi
+
+          semver="$tag"
+          if [[ "$semver" == v* ]]; then
+            semver="${semver#v}"
+          fi
+
+          sha="${EVENT_SHA:-}"
+          if [ -z "$sha" ]; then
+            sha="${GITHUB_SHA}"
+          fi
+          short="${sha:0:7}"
+
+          include_metadata="${INPUT_INCLUDE_METADATA:-true}"
+          draft="${INPUT_DRAFT:-false}"
+          prerelease="${INPUT_PRERELEASE:-false}"
+          enable_signing="${INPUT_ENABLE_SIGNING:-true}"
+
+          source_repo="${EVENT_REPO:-feiandxs/windword}"
+          source_ref="$ref"
+          source_sha="${EVENT_SHA:-}"
+
+          echo "checkout_ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "tag_name=$tag" >> "$GITHUB_OUTPUT"
+          echo "semver=$semver" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$short" >> "$GITHUB_OUTPUT"
+          echo "include_metadata=$include_metadata" >> "$GITHUB_OUTPUT"
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+          echo "enable_signing=$enable_signing" >> "$GITHUB_OUTPUT"
+          echo "source_repo=$source_repo" >> "$GITHUB_OUTPUT"
+          echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+
+  validate-version:
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+        with:
+          repository: feiandxs/windword
+          ref: ${{ needs.meta.outputs.checkout_ref }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Ensure tag matches app version
+        env:
+          EXPECTED_VERSION: ${{ needs.meta.outputs.semver }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs')
+          const path = require('path')
+          const expected = process.env.EXPECTED_VERSION
+          const pkgPath = path.join(process.cwd(), 'apps', 'windword-desktop', 'package.json')
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+          const actual = pkg.version
+          if (!expected) {
+            console.error('Missing EXPECTED_VERSION for release build')
+            process.exit(1)
+          }
+          if (actual !== expected) {
+            console.error(`Tag version (${expected}) does not match apps/windword-desktop/package.json version (${actual})`)
+            process.exit(1)
+          }
+          console.log(`Version OK: ${actual}`)
+          NODE
+
+  macos-arm64:
+    needs:
+      - meta
+      - validate-version
+    uses: ./.github/workflows/public-shared-macos-arm64.yml
+    with:
+      runner: macos-26
+      checkout_ref: ${{ needs.meta.outputs.checkout_ref }}
+      short_sha: ${{ needs.meta.outputs.short_sha }}
+      include_metadata: ${{ needs.meta.outputs.include_metadata }}
+      enable_signing: ${{ needs.meta.outputs.enable_signing }}
+      override_version: ${{ needs.meta.outputs.semver }}
+      include_sensevoice_model: 'false'
+      artifact_name: macos-arm64
+      artifact_filename_suffix: ''
+    secrets: inherit
+
+  macos-x64:
+    needs:
+      - meta
+      - validate-version
+    uses: ./.github/workflows/public-shared-macos-x64.yml
+    with:
+      runner: macos-26
+      checkout_ref: ${{ needs.meta.outputs.checkout_ref }}
+      short_sha: ${{ needs.meta.outputs.short_sha }}
+      include_metadata: ${{ needs.meta.outputs.include_metadata }}
+      enable_signing: ${{ needs.meta.outputs.enable_signing }}
+      override_version: ${{ needs.meta.outputs.semver }}
+      include_sensevoice_model: 'false'
+      artifact_name: macos-x64
+      artifact_filename_suffix: ''
+    secrets: inherit
+
+  linux-x64:
+    needs:
+      - meta
+      - validate-version
+    uses: ./.github/workflows/public-shared-linux-x64.yml
+    with:
+      runner: ubuntu-latest
+      checkout_ref: ${{ needs.meta.outputs.checkout_ref }}
+      short_sha: ${{ needs.meta.outputs.short_sha }}
+      include_metadata: ${{ needs.meta.outputs.include_metadata }}
+      artifact_name: linux-x64
+      artifact_filename_suffix: ''
+      preserve_original_filenames: 'true'
+    secrets: inherit
+
+  windows-x64:
+    needs:
+      - meta
+      - validate-version
+    uses: ./.github/workflows/public-shared-windows-x64.yml
+    with:
+      runner: windows-latest
+      checkout_ref: ${{ needs.meta.outputs.checkout_ref }}
+      short_sha: ${{ needs.meta.outputs.short_sha }}
+      app_dir: apps/windword-desktop
+      artifact_suffix: windows-x64
+      electron_builder_args: --win nsis --x64
+      node_version: '20'
+      pnpm_version: '9'
+      pnpm_store_path: ~/.pnpm-store
+      include_metadata: ${{ needs.meta.outputs.include_metadata }}
+      override_version: ${{ needs.meta.outputs.semver }}
+      include_sensevoice_model: 'false'
+      artifact_name: windows-x64
+      artifact_filename_suffix: ''
+      preserve_original_filenames: 'true'
+    secrets: inherit
+
+  publish:
+    needs:
+      - meta
+      - macos-arm64
+      - macos-x64
+      - linux-x64
+      - windows-x64
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG_NAME: ${{ needs.meta.outputs.tag_name }}
+      SOURCE_REPO: ${{ needs.meta.outputs.source_repo }}
+      SOURCE_REF: ${{ needs.meta.outputs.source_ref }}
+      SOURCE_SHA: ${{ needs.meta.outputs.source_sha }}
+      RELEASE_DRAFT: ${{ needs.meta.outputs.draft }}
+      RELEASE_PRERELEASE: ${{ needs.meta.outputs.prerelease }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download macOS arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-arm64
+          path: artifacts/macos-arm64
+
+      - name: Download macOS x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-x64
+          path: artifacts/macos-x64
+
+      - name: Download Linux x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-x64
+          path: artifacts/linux-x64
+
+      - name: Download Windows x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          path: artifacts/windows-x64
+
+      - name: Prepare release assets
+        id: assets
+        run: |
+          set -euo pipefail
+
+          notes_path="release-notes.md"
+          {
+            echo "Source: ${SOURCE_REPO}"
+            echo "Ref: ${SOURCE_REF}"
+            if [ -n "${SOURCE_SHA:-}" ]; then
+              echo "SHA: ${SOURCE_SHA}"
+              echo "Commit: https://github.com/${SOURCE_REPO}/commit/${SOURCE_SHA}"
+            fi
+            echo
+            echo "Build: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > "$notes_path"
+
+          assets_file="release-assets.txt"
+          find artifacts -type f \( \
+            -name '*.zip' -o \
+            -name '*.dmg' -o \
+            -name '*.yml' -o \
+            -name '*.blockmap' -o \
+            -name '*.exe' -o \
+            -name '*.msi' -o \
+            -name '*.AppImage' \
+          \) -print | sort > "$assets_file"
+          if [ ! -s "$assets_file" ]; then
+            echo 'No eligible release assets were found' >&2
+            exit 1
+          fi
+          echo "assets_file=$assets_file" >> "$GITHUB_OUTPUT"
+          echo "notes_path=$notes_path" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        env:
+          ASSETS_FILE: ${{ steps.assets.outputs.assets_file }}
+          NOTES_PATH: ${{ steps.assets.outputs.notes_path }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAG_NAME:-}" ]; then
+            echo 'Tag name is required to publish a release' >&2
+            exit 1
+          fi
+          if [ -z "${NOTES_PATH:-}" ] || [ ! -f "${NOTES_PATH}" ]; then
+            echo "Release notes file not found at ${NOTES_PATH}" >&2
+            exit 1
+          fi
+          if [ -z "${ASSETS_FILE:-}" ] || [ ! -f "${ASSETS_FILE}" ]; then
+            echo "Asset list file not found at ${ASSETS_FILE}" >&2
+            exit 1
+          fi
+
+          assets=()
+          while IFS= read -r asset; do
+            assets+=("$asset")
+          done < "${ASSETS_FILE}"
+          if [ ${#assets[@]} -eq 0 ]; then
+            echo 'Asset list is empty' >&2
+            exit 1
+          fi
+
+          flags=()
+          if [ "${RELEASE_DRAFT}" = "true" ]; then
+            flags+=(--draft)
+          fi
+          if [ "${RELEASE_PRERELEASE}" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release delete "${TAG_NAME}" -y
+          fi
+
+          gh release create "${TAG_NAME}" "${assets[@]}" \
+            --target main \
+            --title "Windword ${TAG_NAME}" \
+            --notes-file "${NOTES_PATH}" \
+            "${flags[@]}"
