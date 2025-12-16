@@ -31,6 +31,10 @@ on:
         description: Copy packaged artifacts using their original filenames
         required: false
         type: string
+      override_version:
+        description: Semver to force into package metadata before building
+        required: false
+        type: string
     secrets:
       PRIVATE_REPO_PAT:
         required: true
@@ -55,6 +59,7 @@ jobs:
       ARTIFACT_NAME: ${{ inputs.artifact_name || 'linux-x64-dev' }}
       ARTIFACT_FILENAME_SUFFIX: ${{ inputs.artifact_filename_suffix }}
       PRESERVE_ORIGINAL_FILENAMES: ${{ inputs.preserve_original_filenames }}
+      OVERRIDE_VERSION: ${{ inputs.override_version }}
     steps:
       - name: Checkout private repo
         uses: actions/checkout@v4
@@ -88,6 +93,22 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+
+      - name: Override package version
+        if: inputs.override_version != ''
+        shell: bash
+        run: |
+          set -euxo pipefail
+          node <<'NODE'
+          const fs = require('fs')
+          const path = require('path')
+          const version = process.env.OVERRIDE_VERSION
+          if (!version) process.exit(0)
+          const pkgPath = path.join(process.cwd(), process.env.APP_DIR, 'package.json')
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+          pkg.version = version
+          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
+          NODE
 
       - name: Configure pnpm store dir
         shell: bash

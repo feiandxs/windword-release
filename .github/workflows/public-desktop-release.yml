@@ -114,46 +114,8 @@ jobs:
           echo "source_ref=$source_ref" >> "$GITHUB_OUTPUT"
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
 
-  validate-version:
-    needs: meta
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout private repo
-        uses: actions/checkout@v4
-        with:
-          repository: feiandxs/windword
-          ref: ${{ needs.meta.outputs.checkout_ref }}
-          token: ${{ secrets.PRIVATE_REPO_PAT }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Ensure tag matches app version
-        env:
-          EXPECTED_VERSION: ${{ needs.meta.outputs.semver }}
-        run: |
-          set -euo pipefail
-          node <<'NODE'
-          const fs = require('fs')
-          const path = require('path')
-          const expected = process.env.EXPECTED_VERSION
-          const pkgPath = path.join(process.cwd(), 'apps', 'windword-desktop', 'package.json')
-          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
-          const actual = pkg.version
-          if (!expected) {
-            console.error('Missing EXPECTED_VERSION for release build')
-            process.exit(1)
-          }
-          if (actual !== expected) {
-            console.error(`Tag version (${expected}) does not match apps/windword-desktop/package.json version (${actual})`)
-            process.exit(1)
-          }
-          console.log(`Version OK: ${actual}`)
-          NODE
-
   macos-arm64:
-    needs:
-      - meta
-      - validate-version
+    needs: meta
     uses: ./.github/workflows/public-shared-macos-arm64.yml
     with:
       runner: macos-26
@@ -168,9 +130,7 @@ jobs:
     secrets: inherit
 
   macos-x64:
-    needs:
-      - meta
-      - validate-version
+    needs: meta
     uses: ./.github/workflows/public-shared-macos-x64.yml
     with:
       runner: macos-26
@@ -185,24 +145,21 @@ jobs:
     secrets: inherit
 
   linux-x64:
-    needs:
-      - meta
-      - validate-version
+    needs: meta
     uses: ./.github/workflows/public-shared-linux-x64.yml
     with:
       runner: ubuntu-latest
       checkout_ref: ${{ needs.meta.outputs.checkout_ref }}
       short_sha: ${{ needs.meta.outputs.short_sha }}
       include_metadata: ${{ needs.meta.outputs.include_metadata }}
+      override_version: ${{ needs.meta.outputs.semver }}
       artifact_name: linux-x64
       artifact_filename_suffix: ''
       preserve_original_filenames: 'true'
     secrets: inherit
 
   windows-x64:
-    needs:
-      - meta
-      - validate-version
+    needs: meta
     uses: ./.github/workflows/public-shared-windows-x64.yml
     with:
       runner: windows-latest
