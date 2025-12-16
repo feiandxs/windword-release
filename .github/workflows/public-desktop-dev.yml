@@ -67,8 +67,13 @@ jobs:
     uses: ./.github/workflows/public-shared-windows-x64.yml
     with:
       runner: windows-latest
-      checkout_ref: ${{ needs.prepare.outputs.checkout_ref }}
       short_sha: ${{ needs.prepare.outputs.short_sha }}
+      app_dir: apps/windword-desktop
+      artifact_suffix: windows-x64
+      electron_builder_args: --win nsis --x64
+      node_version: '20'
+      pnpm_version: '9'
+      pnpm_store_path: ~/.pnpm-store
       include_metadata: ${{ inputs.include_metadata }}
       include_sensevoice_model: 'false'
       artifact_name: windows-x64-dev
