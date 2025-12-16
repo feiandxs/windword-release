@@ -7,6 +7,10 @@ on:
         description: Label or expression for the runner to execute on
         required: true
         type: string
+      checkout_ref:
+        description: Ref to check out (from prepare)
+        required: true
+        type: string
       short_sha:
         description: Short SHA for tagging build artifacts
         required: true
@@ -59,6 +63,9 @@ on:
         description: Optional suffix appended to the original artifact filename (before extension) when preserving filenames
         required: false
         type: string
+    secrets:
+      PRIVATE_REPO_PAT:
+        required: true
 
 permissions:
   contents: read
@@ -82,8 +89,14 @@ jobs:
       NPM_CONFIG_IGNORE_SCRIPTS: 'false'
       PNPM_IGNORE_SCRIPTS: 'false'
     steps:
-      - name: Checkout repository
+      - name: Checkout private repo
         uses: actions/checkout@v4
+        with:
+          repository: feiandxs/windword
+          ref: ${{ inputs.checkout_ref }}
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v3
@@ -95,6 +108,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
+
+      - name: Prepare pnpm store dir
+        shell: bash
+        run: mkdir -p "${PNPM_STORE_PATH}"
 
       - name: Override package version
         if: inputs.override_version != ''

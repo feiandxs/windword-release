@@ -67,6 +67,7 @@ jobs:
     uses: ./.github/workflows/public-shared-windows-x64.yml
     with:
       runner: windows-latest
+      checkout_ref: ${{ needs.prepare.outputs.checkout_ref }}
       short_sha: ${{ needs.prepare.outputs.short_sha }}
       app_dir: apps/windword-desktop
       artifact_suffix: windows-x64
