@@ -243,6 +243,10 @@ jobs:
           } > "$notes_path"
 
           assets_file="release-assets.txt"
+          release_dir="release-assets"
+          mkdir -p "$release_dir"
+          : > "$assets_file"
+
           find artifacts -type f \( \
             -name '*.zip' -o \
             -name '*.dmg' -o \
@@ -251,7 +255,21 @@ jobs:
             -name '*.exe' -o \
             -name '*.msi' -o \
             -name '*.AppImage' \
-          \) -print | sort > "$assets_file"
+          \) -print | sort | while IFS= read -r asset; do
+            platform="$(echo "$asset" | cut -d/ -f2)"
+            if [ -z "$platform" ]; then
+              platform="artifact"
+            fi
+            base="$(basename "$asset")"
+            dest="${release_dir}/${platform}-${base}"
+            counter=1
+            while [ -e "$dest" ]; do
+              counter=$((counter + 1))
+              dest="${release_dir}/${platform}-${counter}-${base}"
+            done
+            cp "$asset" "$dest"
+            echo "$dest" >> "$assets_file"
+          done
           if [ ! -s "$assets_file" ]; then
             echo 'No eligible release assets were found' >&2
             exit 1
