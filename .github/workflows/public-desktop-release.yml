@@ -198,6 +198,9 @@ jobs:
       RELEASE_PRERELEASE: ${{ needs.meta.outputs.prerelease }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Checkout repo (required for gh release)
+        uses: actions/checkout@v4
+
       - name: Download macOS arm64 artifact
         uses: actions/download-artifact@v4
         with:
@@ -297,6 +300,7 @@ jobs:
           fi
 
           gh release create "${TAG_NAME}" "${assets[@]}" \
+            --repo "${GITHUB_REPOSITORY}" \
             --target main \
             --title "Windword ${TAG_NAME}" \
             --notes-file "${NOTES_PATH}" \
