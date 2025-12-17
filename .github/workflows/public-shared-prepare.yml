@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       runner:
-        description: Runner label for prepare job
+        description: Runner label for the prepare job
         required: true
         type: string
       target_ref:
