@@ -1,0 +1,63 @@
+name: Upload Release to Cloud Storage
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euxo pipefail
+          mkdir -p artifacts
+          gh release download "$TAG" -D artifacts
+          echo "Downloaded assets:"
+          ls -la artifacts/
+
+      - name: Install AWS CLI
+        run: |
+          pip install awscli
+
+      - name: Upload to Qiniu
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.QINIU_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.QINIU_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.QINIU_REGION }}
+          QINIU_ENDPOINT: ${{ secrets.QINIU_ENDPOINT }}
+          QINIU_BUCKET: ${{ secrets.QINIU_BUCKET }}
+          QINIU_PREFIX: ${{ secrets.QINIU_PREFIX }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euxo pipefail
+
+          PREFIX="${QINIU_PREFIX:-releases}"
+          DEST="s3://${QINIU_BUCKET}/${PREFIX}/${TAG}"
+
+          echo "Uploading to Qiniu: ${DEST}"
+          aws s3 sync artifacts "$DEST" --endpoint-url "$QINIU_ENDPOINT"
+
+          echo "Qiniu upload completed successfully"
+
+      - name: Upload to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PREFIX: ${{ secrets.R2_PREFIX }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euxo pipefail
+
+          PREFIX="${R2_PREFIX:-releases}"
+          DEST="s3://${R2_BUCKET}/${PREFIX}/${TAG}"
+
+          echo "Uploading to Cloudflare R2: ${DEST}"
+          aws s3 sync artifacts "$DEST" --endpoint-url "$R2_ENDPOINT"
+
+          echo "Cloudflare R2 upload completed successfully"
