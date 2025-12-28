@@ -427,7 +427,7 @@ jobs:
 
       - name: Create short path alias
         shell: pwsh
-        run: subst W: ${{ github.workspace }}
+        run: subst W: "${{ github.workspace }}"
 
       - name: Install NSIS
         shell: pwsh
