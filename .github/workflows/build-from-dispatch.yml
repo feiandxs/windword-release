@@ -425,10 +425,6 @@ jobs:
           token: ${{ secrets.PRIVATE_REPO_PAT }}
           ref: ${{ env.TAG_NAME }}
 
-      - name: Create short path alias
-        shell: pwsh
-        run: 'subst W: "${{ github.workspace }}"'
-
       - name: Install NSIS
         shell: pwsh
         run: choco install nsis -y
@@ -444,9 +440,12 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Configure pnpm for shorter paths
+        shell: bash
+        run: pnpm config set virtual-store-dir-max-length 70
+
       - name: Override package version
         shell: bash
-        working-directory: W:\
         run: |
           set -euxo pipefail
           node <<'NODE'
@@ -462,7 +461,6 @@ jobs:
 
       - name: Install dependencies
         shell: bash
-        working-directory: W:\
         run: |
           set -euxo pipefail
           pnpm --version
@@ -470,12 +468,10 @@ jobs:
 
       - name: Build project
         shell: bash
-        working-directory: W:\
         run: pnpm --filter @windword/desktop build
 
       - name: Package artifacts
         shell: bash
-        working-directory: W:\
         run: |
           set -euxo pipefail
           pnpm --filter @windword/desktop exec electron-builder --win nsis --x64
@@ -498,7 +494,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: W:\release
+          path: release
 
   # ============================================
   # Create Release: 创建 GitHub Release
