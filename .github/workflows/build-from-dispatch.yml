@@ -113,7 +113,7 @@ jobs:
 
       - name: Install setuptools for node-gyp
         shell: bash
-        run: pip3 install setuptools
+        run: pip3 install setuptools --break-system-packages
 
       - name: Override package version
         shell: bash
@@ -296,7 +296,7 @@ jobs:
 
       - name: Install setuptools for node-gyp
         shell: bash
-        run: pip3 install setuptools
+        run: pip3 install setuptools --break-system-packages
 
       - name: Override package version
         shell: bash
