@@ -417,19 +417,15 @@ jobs:
       SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
       OVERRIDE_VERSION: ${{ needs.prepare.outputs.semver }}
       TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+      WIN_WORKDIR: D:\w
     steps:
-      - name: Enable long paths
-        shell: pwsh
-        run: |
-          git config --system core.longpaths true
-          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
-
       - name: Checkout private repository
         uses: actions/checkout@v4
         with:
           repository: feiandxs/windword
           token: ${{ secrets.PRIVATE_REPO_PAT }}
           ref: ${{ env.TAG_NAME }}
+          path: ${{ env.WIN_WORKDIR }}
 
       - name: Install NSIS
         shell: pwsh
@@ -448,6 +444,7 @@ jobs:
 
       - name: Override package version
         shell: bash
+        working-directory: ${{ env.WIN_WORKDIR }}
         run: |
           set -euxo pipefail
           node <<'NODE'
@@ -463,17 +460,20 @@ jobs:
 
       - name: Install dependencies
         shell: bash
+        working-directory: ${{ env.WIN_WORKDIR }}
         run: |
           set -euxo pipefail
           pnpm --version
-          pnpm install --frozen-lockfile --config.store-dir=${{ env.PNPM_STORE_PATH }}
+          pnpm install --frozen-lockfile
 
       - name: Build project
         shell: bash
+        working-directory: ${{ env.WIN_WORKDIR }}
         run: pnpm --filter @windword/desktop build
 
       - name: Package artifacts
         shell: bash
+        working-directory: ${{ env.WIN_WORKDIR }}
         run: |
           set -euxo pipefail
           pnpm --filter @windword/desktop exec electron-builder --win nsis --x64
@@ -496,7 +496,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: release
+          path: ${{ env.WIN_WORKDIR }}/release
 
   # ============================================
   # Create Release: 创建 GitHub Release
