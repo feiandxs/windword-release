@@ -417,7 +417,6 @@ jobs:
       SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
       OVERRIDE_VERSION: ${{ needs.prepare.outputs.semver }}
       TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
-      WIN_WORKDIR: D:\w
     steps:
       - name: Checkout private repository
         uses: actions/checkout@v4
@@ -425,7 +424,10 @@ jobs:
           repository: feiandxs/windword
           token: ${{ secrets.PRIVATE_REPO_PAT }}
           ref: ${{ env.TAG_NAME }}
-          path: ${{ env.WIN_WORKDIR }}
+
+      - name: Create short path alias
+        shell: pwsh
+        run: subst W: ${{ github.workspace }}
 
       - name: Install NSIS
         shell: pwsh
@@ -444,7 +446,7 @@ jobs:
 
       - name: Override package version
         shell: bash
-        working-directory: ${{ env.WIN_WORKDIR }}
+        working-directory: W:\
         run: |
           set -euxo pipefail
           node <<'NODE'
@@ -460,7 +462,7 @@ jobs:
 
       - name: Install dependencies
         shell: bash
-        working-directory: ${{ env.WIN_WORKDIR }}
+        working-directory: W:\
         run: |
           set -euxo pipefail
           pnpm --version
@@ -468,12 +470,12 @@ jobs:
 
       - name: Build project
         shell: bash
-        working-directory: ${{ env.WIN_WORKDIR }}
+        working-directory: W:\
         run: pnpm --filter @windword/desktop build
 
       - name: Package artifacts
         shell: bash
-        working-directory: ${{ env.WIN_WORKDIR }}
+        working-directory: W:\
         run: |
           set -euxo pipefail
           pnpm --filter @windword/desktop exec electron-builder --win nsis --x64
@@ -496,7 +498,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64
-          path: ${{ env.WIN_WORKDIR }}/release
+          path: W:\release
 
   # ============================================
   # Create Release: 创建 GitHub Release
