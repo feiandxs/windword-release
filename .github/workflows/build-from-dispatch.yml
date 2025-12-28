@@ -418,6 +418,12 @@ jobs:
       OVERRIDE_VERSION: ${{ needs.prepare.outputs.semver }}
       TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
     steps:
+      - name: Enable long paths
+        shell: pwsh
+        run: |
+          git config --system core.longpaths true
+          New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
+
       - name: Checkout private repository
         uses: actions/checkout@v4
         with:
