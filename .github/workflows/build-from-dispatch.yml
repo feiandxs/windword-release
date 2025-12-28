@@ -425,6 +425,10 @@ jobs:
           token: ${{ secrets.PRIVATE_REPO_PAT }}
           ref: ${{ env.TAG_NAME }}
 
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y
+
       - name: Set up pnpm
         uses: pnpm/action-setup@v3
         with:
