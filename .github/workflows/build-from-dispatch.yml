@@ -569,12 +569,13 @@ jobs:
           done < "${ASSETS_FILE}"
 
           # Delete existing release if exists
-          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
-            gh release delete "${TAG_NAME}" -y || true
+          if gh release view "${TAG_NAME}" --repo ${{ github.repository }} >/dev/null 2>&1; then
+            gh release delete "${TAG_NAME}" --repo ${{ github.repository }} -y || true
           fi
 
           # Create new release
           gh release create "${TAG_NAME}" "${assets[@]}" \
+            --repo ${{ github.repository }} \
             --title "WindWord ${TAG_NAME}" \
             --notes-file release-notes.md
 
@@ -595,7 +596,7 @@ jobs:
         run: |
           set -euxo pipefail
           mkdir -p artifacts
-          gh release download "$TAG_NAME" -D artifacts
+          gh release download "$TAG_NAME" --repo ${{ github.repository }} -D artifacts
           echo "Downloaded assets:"
           ls -la artifacts/
 
