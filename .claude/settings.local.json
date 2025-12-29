@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh run view:*)",
+      "Bash(gh api:*)",
+      "Bash(gh release view:*)",
+      "Bash(gh release list:*)",
+      "Bash(codex --help:*)",
+      "Bash(codex exec \"electron-builder --publish never 在 CI 环境中是否会生成 latest-mac.yml？需要什么条件？简短回答。\")",
+      "Bash(codex exec \"electron-builder 如何只生成 latest-mac.yml 文件但不实际上传？简短回答。\")",
+      "WebSearch",
+      "WebFetch(domain:www.electron.build)",
+      "WebFetch(domain:github.com)",
+      "Bash(gh release delete:*)",
+      "Bash(git tag:*)",
+      "Bash(git push:*)",
+      "Bash(gh run list:*)"
+    ]
+  }
+}
