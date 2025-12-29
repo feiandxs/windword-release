@@ -183,10 +183,9 @@ jobs:
             exit 1
           fi
           cp "$zip" "release/$(basename "$zip")"
-          # Include metadata files
-          METADATA_FILE=$(find "$APP_DIST" -maxdepth 1 -type f -name 'latest-mac*.yml' -print -quit || true)
-          if [ -n "$METADATA_FILE" ]; then
-            cp "$METADATA_FILE" "release/$(basename "$METADATA_FILE")"
+          # Include metadata files (rename to arch-specific name)
+          if [ -f "$APP_DIST/latest-mac.yml" ]; then
+            cp "$APP_DIST/latest-mac.yml" "release/latest-mac-arm64.yml"
           fi
           find "$APP_DIST" -maxdepth 1 -type f -name '*.blockmap' -exec cp {} release/ \;
 
@@ -366,10 +365,9 @@ jobs:
             exit 1
           fi
           cp "$zip" "release/$(basename "$zip")"
-          # Include metadata files
-          METADATA_FILE=$(find "$APP_DIST" -maxdepth 1 -type f -name 'latest-mac*.yml' -print -quit || true)
-          if [ -n "$METADATA_FILE" ]; then
-            cp "$METADATA_FILE" "release/$(basename "$METADATA_FILE")"
+          # Include metadata files (rename to arch-specific name)
+          if [ -f "$APP_DIST/latest-mac.yml" ]; then
+            cp "$APP_DIST/latest-mac.yml" "release/latest-mac-x64.yml"
           fi
           find "$APP_DIST" -maxdepth 1 -type f -name '*.blockmap' -exec cp {} release/ \;
 
@@ -483,10 +481,9 @@ jobs:
             exit 1
           fi
           cp "$installer" "release/$(basename "$installer")"
-          # Include metadata files
-          METADATA_FILE=$(find "$APP_DIST" -maxdepth 1 -type f -name 'latest.yml' -print -quit || true)
-          if [ -n "$METADATA_FILE" ]; then
-            cp "$METADATA_FILE" "release/$(basename "$METADATA_FILE")"
+          # Include metadata files (rename to arch-specific name)
+          if [ -f "$APP_DIST/latest.yml" ]; then
+            cp "$APP_DIST/latest.yml" "release/latest-win-x64.yml"
           fi
           find "$APP_DIST" -maxdepth 1 -type f -name '*.blockmap' -exec cp {} release/ \;
 
@@ -514,50 +511,6 @@ jobs:
         with:
           path: artifacts
 
-      - name: Merge macOS yml files
-        shell: bash
-        run: |
-          set -euxo pipefail
-          # 合并 macos-arm64 和 macos-x64 的 latest-mac.yml
-          ARM64_YML="artifacts/macos-arm64/latest-mac.yml"
-          X64_YML="artifacts/macos-x64/latest-mac.yml"
-          MERGED_YML="artifacts/latest-mac.yml"
-
-          if [ -f "$ARM64_YML" ] && [ -f "$X64_YML" ]; then
-            echo "Merging latest-mac.yml files..."
-            # 使用 arm64 作为基础，提取 x64 的 files 条目并合并
-            # 读取 arm64 yml 的 version 和 releaseDate
-            VERSION=$(grep '^version:' "$ARM64_YML" | head -1)
-            RELEASE_DATE=$(grep '^releaseDate:' "$ARM64_YML" | head -1)
-
-            # 创建合并后的 yml
-            cat > "$MERGED_YML" << ENDYML
-$VERSION
-files:
-$(sed -n '/^files:/,/^path:/p' "$ARM64_YML" | grep -E '^  - url:|^    sha512:|^    size:')
-$(sed -n '/^files:/,/^path:/p' "$X64_YML" | grep -E '^  - url:|^    sha512:|^    size:')
-path: $(grep '^path:' "$ARM64_YML" | cut -d' ' -f2-)
-sha512: $(grep '^sha512:' "$ARM64_YML" | tail -1 | cut -d' ' -f2-)
-$RELEASE_DATE
-ENDYML
-
-            echo "Merged latest-mac.yml:"
-            cat "$MERGED_YML"
-
-            # 删除原始的 yml 文件，只保留合并后的
-            rm -f "$ARM64_YML" "$X64_YML"
-          elif [ -f "$ARM64_YML" ]; then
-            mv "$ARM64_YML" "$MERGED_YML"
-          elif [ -f "$X64_YML" ]; then
-            mv "$X64_YML" "$MERGED_YML"
-          fi
-
-          # Windows 的 latest.yml 只有一个，移动到 artifacts 根目录
-          WIN_YML="artifacts/windows-x64/latest.yml"
-          if [ -f "$WIN_YML" ]; then
-            mv "$WIN_YML" "artifacts/latest.yml"
-          fi
-
       - name: Prepare release assets
         id: assets
         shell: bash
@@ -565,19 +518,14 @@ ENDYML
           set -euxo pipefail
           assets_file="release-assets.txt"
 
-          # 收集所有文件，排除子目录中的 yml（已合并到根目录）
-          find artifacts -maxdepth 1 -type f \( \
-            -name '*.yml' \
-          \) -print > "$assets_file"
-
+          # 收集所有文件
           find artifacts -type f \( \
             -name '*.zip' -o \
             -name '*.dmg' -o \
             -name '*.exe' -o \
+            -name '*.yml' -o \
             -name '*.blockmap' \
-          \) -print >> "$assets_file"
-
-          sort -o "$assets_file" "$assets_file"
+          \) -print | sort > "$assets_file"
 
           if [ ! -s "$assets_file" ]; then
             echo 'No eligible release assets were found' >&2

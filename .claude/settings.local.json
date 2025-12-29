@@ -14,7 +14,10 @@
       "Bash(gh release delete:*)",
       "Bash(git tag:*)",
       "Bash(git push:*)",
-      "Bash(gh run list:*)"
+      "Bash(gh run list:*)",
+      "Bash(python3:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
