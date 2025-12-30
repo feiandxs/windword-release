@@ -187,6 +187,8 @@ jobs:
           if [ -f "$APP_DIST/latest-mac.yml" ]; then
             cp "$APP_DIST/latest-mac.yml" "release/latest-mac.yml"
           fi
+          # Copy DMG and blockmap files
+          find "$APP_DIST" -maxdepth 1 -type f -name '*.dmg' -exec cp {} release/ \;
           find "$APP_DIST" -maxdepth 1 -type f -name '*.blockmap' -exec cp {} release/ \;
 
       - name: Validate notarization
@@ -194,13 +196,21 @@ jobs:
         run: |
           set -euxo pipefail
           APP_DIST="${APP_DIR}/dist"
-          ARCHIVE=$(find "$APP_DIST" -maxdepth 1 -type f -name '*.zip' ! -name '*.blockmap' -print -quit || true)
+          # Try to validate zip first, then dmg
+          ARCHIVE=$(find "$APP_DIST" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.dmg' \) ! -name '*.blockmap' -print -quit || true)
           if [ -z "$ARCHIVE" ]; then
-            echo 'No zip artifact found to validate' >&2
+            echo 'No archive artifact found to validate' >&2
             exit 1
           fi
           EXTRACT_DIR="$(mktemp -d)"
-          ditto -x -k "$ARCHIVE" "$EXTRACT_DIR"
+          if [[ "$ARCHIVE" == *.zip ]]; then
+            ditto -x -k "$ARCHIVE" "$EXTRACT_DIR"
+          else
+            # For DMG, mount and copy
+            hdiutil attach "$ARCHIVE" -mountpoint "$EXTRACT_DIR/mnt" -nobrowse
+            cp -R "$EXTRACT_DIR/mnt"/*.app "$EXTRACT_DIR/" 2>/dev/null || true
+            hdiutil detach "$EXTRACT_DIR/mnt"
+          fi
           APP_PATH=$(find "$EXTRACT_DIR" -maxdepth 2 -type d -name '*.app' -print -quit || true)
           if [ -z "$APP_PATH" ]; then
             echo 'Unable to locate .app bundle within archive' >&2
@@ -369,6 +379,8 @@ jobs:
           if [ -f "$APP_DIST/latest-mac.yml" ]; then
             cp "$APP_DIST/latest-mac.yml" "release/latest-mac.yml"
           fi
+          # Copy DMG and blockmap files
+          find "$APP_DIST" -maxdepth 1 -type f -name '*.dmg' -exec cp {} release/ \;
           find "$APP_DIST" -maxdepth 1 -type f -name '*.blockmap' -exec cp {} release/ \;
 
       - name: Validate notarization
@@ -376,13 +388,21 @@ jobs:
         run: |
           set -euxo pipefail
           APP_DIST="${APP_DIR}/dist"
-          ARCHIVE=$(find "$APP_DIST" -maxdepth 1 -type f -name '*.zip' ! -name '*.blockmap' -print -quit || true)
+          # Try to validate zip first, then dmg
+          ARCHIVE=$(find "$APP_DIST" -maxdepth 1 -type f \( -name '*.zip' -o -name '*.dmg' \) ! -name '*.blockmap' -print -quit || true)
           if [ -z "$ARCHIVE" ]; then
-            echo 'No zip artifact found to validate' >&2
+            echo 'No archive artifact found to validate' >&2
             exit 1
           fi
           EXTRACT_DIR="$(mktemp -d)"
-          ditto -x -k "$ARCHIVE" "$EXTRACT_DIR"
+          if [[ "$ARCHIVE" == *.zip ]]; then
+            ditto -x -k "$ARCHIVE" "$EXTRACT_DIR"
+          else
+            # For DMG, mount and copy
+            hdiutil attach "$ARCHIVE" -mountpoint "$EXTRACT_DIR/mnt" -nobrowse
+            cp -R "$EXTRACT_DIR/mnt"/*.app "$EXTRACT_DIR/" 2>/dev/null || true
+            hdiutil detach "$EXTRACT_DIR/mnt"
+          fi
           APP_PATH=$(find "$EXTRACT_DIR" -maxdepth 2 -type d -name '*.app' -print -quit || true)
           if [ -z "$APP_PATH" ]; then
             echo 'Unable to locate .app bundle within archive' >&2
