@@ -174,7 +174,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          pnpm --filter @windword/desktop exec electron-builder --mac zip --arm64 --publish never
+          pnpm --filter @windword/desktop exec electron-builder --mac --arm64 --publish never
           mkdir -p release
           APP_DIST="${APP_DIR}/dist"
           zip=$(find "$APP_DIST" -maxdepth 1 -type f -name '*.zip' ! -name '*.blockmap' -print -quit || true)
@@ -366,7 +366,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          pnpm --filter @windword/desktop exec electron-builder --mac zip --x64 --publish never
+          pnpm --filter @windword/desktop exec electron-builder --mac --x64 --publish never
           mkdir -p release
           APP_DIST="${APP_DIR}/dist"
           zip=$(find "$APP_DIST" -maxdepth 1 -type f -name '*.zip' ! -name '*.blockmap' -print -quit || true)
