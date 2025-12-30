@@ -514,6 +514,85 @@ jobs:
           path: release
 
   # ============================================
+  # Linux x64 Build
+  # ============================================
+  linux-x64:
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+      OVERRIDE_VERSION: ${{ needs.prepare.outputs.semver }}
+      TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v4
+        with:
+          repository: feiandxs/windword
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ env.TAG_NAME }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Override package version
+        shell: bash
+        run: |
+          set -euxo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const path = require('path');
+          const version = process.env.OVERRIDE_VERSION;
+          if (!version) process.exit(0);
+          const pkgPath = path.join(process.cwd(), process.env.APP_DIR, 'package.json');
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          pkg.version = version;
+          fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+          NODE
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm --version
+          pnpm install --frozen-lockfile
+
+      - name: Build project
+        shell: bash
+        run: pnpm --filter @windword/desktop build
+
+      - name: Package artifacts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm --filter @windword/desktop exec electron-builder --linux --x64 --publish never
+          mkdir -p release
+          APP_DIST="${APP_DIR}/dist"
+          appimage=$(find "$APP_DIST" -maxdepth 1 -type f -name '*.AppImage' -print -quit || true)
+          if [ -z "$appimage" ]; then
+            echo 'No AppImage produced by electron-builder' >&2
+            exit 1
+          fi
+          cp "$appimage" "release/$(basename "$appimage")"
+          # Include metadata files
+          if [ -f "$APP_DIST/latest-linux.yml" ]; then
+            cp "$APP_DIST/latest-linux.yml" "release/latest-linux.yml"
+          fi
+
+      - name: Upload Linux x64 artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: release
+
+  # ============================================
   # Create Release: 创建 GitHub Release
   # ============================================
   create-release:
@@ -522,6 +601,7 @@ jobs:
       - macos-arm64
       - macos-x64
       - windows-x64
+      - linux-x64
     runs-on: ubuntu-latest
     env:
       TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
@@ -580,6 +660,12 @@ jobs:
             mv "$WIN_YML" "artifacts/latest.yml"
           fi
 
+          # Linux 的 latest-linux.yml 移动到 artifacts 根目录
+          LINUX_YML="artifacts/linux-x64/latest-linux.yml"
+          if [ -f "$LINUX_YML" ]; then
+            mv "$LINUX_YML" "artifacts/latest-linux.yml"
+          fi
+
       - name: Prepare release assets
         id: assets
         shell: bash
@@ -590,11 +676,12 @@ jobs:
           # 收集根目录的 yml 文件（已合并）
           find artifacts -maxdepth 1 -type f -name '*.yml' -print > "$assets_file"
 
-          # 收集所有子目录的其他文件（zip, exe, blockmap 等）
+          # 收集所有子目录的其他文件（zip, exe, AppImage, blockmap 等）
           find artifacts -mindepth 2 -type f \( \
             -name '*.zip' -o \
             -name '*.dmg' -o \
             -name '*.exe' -o \
+            -name '*.AppImage' -o \
             -name '*.blockmap' \
           \) -print >> "$assets_file"
 
@@ -625,6 +712,7 @@ jobs:
           | macOS (Apple Silicon) | ✅ |
           | macOS (Intel) | ✅ |
           | Windows (x64) | ✅ |
+          | Linux (x64) | ✅ |
           EOF
 
       - name: Create GitHub Release
