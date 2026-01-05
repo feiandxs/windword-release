@@ -796,9 +796,9 @@ jobs:
         run: |
           set -euxo pipefail
           PREFIX="${R2_PREFIX:-releases}"
-          KEEP_VERSIONS=5
-          # Set to "true" for testing (shows what would be deleted without deleting)
-          DRY_RUN="true"
+          KEEP_VERSIONS=4
+          # Set to "true" for testing, "false" for actual deletion
+          DRY_RUN="false"
 
           echo "=== R2 Retention Policy: Keep latest ${KEEP_VERSIONS} versions ==="
           if [ "$DRY_RUN" = "true" ]; then
