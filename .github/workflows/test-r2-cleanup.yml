@@ -1,0 +1,155 @@
+name: Test R2 Cleanup (Manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run mode (true = show only, false = actually delete)'
+        required: true
+        default: 'true'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      keep_versions:
+        description: 'Number of versions to keep'
+        required: true
+        default: '5'
+
+jobs:
+  test-cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install AWS CLI
+        run: pip install awscli
+
+      - name: List current R2 contents
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PREFIX: ${{ secrets.R2_PREFIX }}
+        run: |
+          set -euxo pipefail
+          PREFIX="${R2_PREFIX:-releases}"
+          
+          echo "=========================================="
+          echo "  Current R2 Contents"
+          echo "=========================================="
+          aws s3 ls "s3://${R2_BUCKET}/${PREFIX}/" --endpoint-url "$R2_ENDPOINT" || echo "Bucket is empty or not accessible"
+          echo ""
+
+      - name: Test R2 retention cleanup
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PREFIX: ${{ secrets.R2_PREFIX }}
+        run: |
+          set -euxo pipefail
+          PREFIX="${R2_PREFIX:-releases}"
+          KEEP_VERSIONS=${{ inputs.keep_versions }}
+          DRY_RUN="${{ inputs.dry_run }}"
+
+          echo "=========================================="
+          echo "  R2 Retention Policy Test"
+          echo "=========================================="
+          echo "Keep versions: ${KEEP_VERSIONS}"
+          echo "Dry run: ${DRY_RUN}"
+          echo ""
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "*** DRY RUN MODE - No files will be deleted ***"
+            echo ""
+          fi
+
+          # List all objects and extract unique versions
+          # Supports both stable (1.2.3) and pre-release (1.2.3-beta.1) versions
+          echo "Fetching version list from R2..."
+          RAW_LIST=$(aws s3 ls "s3://${R2_BUCKET}/${PREFIX}/" --endpoint-url "$R2_ENDPOINT" || true)
+          
+          if [ -z "$RAW_LIST" ]; then
+            echo "No files found in R2 bucket"
+            exit 0
+          fi
+
+          echo "Raw file list:"
+          echo "$RAW_LIST"
+          echo ""
+
+          VERSIONS=$(echo "$RAW_LIST" | \
+            grep -oE 'WindWord-[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?' | \
+            sed 's/WindWord-//' | \
+            sort -u | \
+            sort -t. -k1,1n -k2,2n -k3,3n || true)
+
+          if [ -z "$VERSIONS" ]; then
+            echo "No WindWord versions found in filenames"
+            exit 0
+          fi
+
+          VERSION_COUNT=$(echo "$VERSIONS" | wc -l | tr -d ' ')
+          
+          echo "=========================================="
+          echo "  Found ${VERSION_COUNT} unique versions:"
+          echo "=========================================="
+          echo "$VERSIONS" | nl
+          echo ""
+
+          if [ "$VERSION_COUNT" -le "$KEEP_VERSIONS" ]; then
+            echo "No cleanup needed (${VERSION_COUNT} <= ${KEEP_VERSIONS})"
+            exit 0
+          fi
+
+          # Get versions to delete (all except the last KEEP_VERSIONS)
+          DELETE_COUNT=$((VERSION_COUNT - KEEP_VERSIONS))
+          VERSIONS_TO_DELETE=$(echo "$VERSIONS" | head -n "$DELETE_COUNT")
+          VERSIONS_TO_KEEP=$(echo "$VERSIONS" | tail -n "$KEEP_VERSIONS")
+
+          echo "=========================================="
+          echo "  Versions to DELETE (${DELETE_COUNT}):"
+          echo "=========================================="
+          echo "$VERSIONS_TO_DELETE" | nl
+          echo ""
+
+          echo "=========================================="
+          echo "  Versions to KEEP (${KEEP_VERSIONS}):"
+          echo "=========================================="
+          echo "$VERSIONS_TO_KEEP" | nl
+          echo ""
+
+          echo "=========================================="
+          echo "  Cleanup Actions:"
+          echo "=========================================="
+          
+          for VERSION in $VERSIONS_TO_DELETE; do
+            echo ""
+            echo "--- Version ${VERSION} ---"
+
+            if [ "$DRY_RUN" = "true" ]; then
+              # Dry run: just show what would be deleted
+              aws s3 rm "s3://${R2_BUCKET}/${PREFIX}/" \
+                --endpoint-url "$R2_ENDPOINT" \
+                --recursive \
+                --exclude "*" \
+                --include "*-${VERSION}-*" \
+                --include "*-${VERSION}.*" \
+                --dryrun || echo "No files matched for version ${VERSION}"
+            else
+              # Actual deletion
+              echo "DELETING files for version ${VERSION}..."
+              aws s3 rm "s3://${R2_BUCKET}/${PREFIX}/" \
+                --endpoint-url "$R2_ENDPOINT" \
+                --recursive \
+                --exclude "*" \
+                --include "*-${VERSION}-*" \
+                --include "*-${VERSION}.*"
+            fi
+          done
+
+          echo ""
+          echo "=========================================="
+          echo "  Cleanup Complete!"
+          echo "=========================================="
