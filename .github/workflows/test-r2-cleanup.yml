@@ -80,7 +80,7 @@ jobs:
           echo ""
 
           VERSIONS=$(echo "$RAW_LIST" | \
-            grep -oiE 'Windword-[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?' | \
+            grep -oiE 'Windword-[0-9]+\.[0-9]+\.[0-9]+' | \
             sed 's/[Ww]indword-//i' | \
             sort -u | \
             sort -t. -k1,1n -k2,2n -k3,3n || true)

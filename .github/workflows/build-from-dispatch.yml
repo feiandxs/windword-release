@@ -808,7 +808,7 @@ jobs:
           # List all objects and extract unique versions
           # Supports both stable (1.2.3) and pre-release (1.2.3-beta.1) versions
           VERSIONS=$(aws s3 ls "s3://${R2_BUCKET}/${PREFIX}/" --endpoint-url "$R2_ENDPOINT" | \
-            grep -oiE 'Windword-[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?' | \
+            grep -oiE 'Windword-[0-9]+\.[0-9]+\.[0-9]+' | \
             sed 's/[Ww]indword-//i' | \
             sort -u | \
             sort -t. -k1,1n -k2,2n -k3,3n)
