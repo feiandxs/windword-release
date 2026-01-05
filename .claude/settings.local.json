@@ -18,7 +18,8 @@
       "Bash(python3:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "Bash(\"https://api.github.com/repos/feiandxs/windword-release/dispatches\" )"
     ]
   }
 }
