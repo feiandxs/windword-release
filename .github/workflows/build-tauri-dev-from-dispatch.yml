@@ -132,7 +132,7 @@ jobs:
         run: |
           set -euxo pipefail
           pnpm --filter windword-tauri tauri build \
-            --config apps/windword-tauri/src-tauri/tauri.dev.conf.json \
+            --config src-tauri/tauri.dev.conf.json \
             --bundles app,dmg \
             --no-sign \
             --ignore-version-mismatches \
@@ -162,6 +162,11 @@ jobs:
             -name '*.tar.gz' -o \
             -name '*.sig' \
           \) -exec cp {} release/ \;
+
+          DMG_BUNDLE_DIR="${APP_DIR}/src-tauri/target/release/bundle/dmg"
+          if [ -d "$DMG_BUNDLE_DIR" ]; then
+            find "$DMG_BUNDLE_DIR" -maxdepth 1 -type f -name '*.dmg' -exec cp {} release/ \;
+          fi
 
           if [ -z "$(find release -maxdepth 1 -type f -print -quit)" ]; then
             echo "::error::No TAURI dev artifacts collected"
