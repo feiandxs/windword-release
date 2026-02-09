@@ -1,0 +1,275 @@
+name: Build Tauri Dev Release from Dispatch
+
+on:
+  repository_dispatch:
+    types: [build-tauri-dev]
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '9'
+  PNPM_STORE_PATH: ~/.pnpm-store
+  APP_DIR: apps/windword-tauri
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.meta.outputs.tag_name }}
+      semver: ${{ steps.meta.outputs.semver }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+    steps:
+      - name: Parse dispatch payload
+        id: meta
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          TAG="${{ github.event.client_payload.tag }}"
+          SHA="${{ github.event.client_payload.sha }}"
+
+          if [[ -z "$TAG" || -z "$SHA" ]]; then
+            echo "::error::Dispatch payload must contain tag and sha"
+            exit 1
+          fi
+
+          if [[ ! "$TAG" =~ ^tauri-dev-([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Unsupported tag format: $TAG (expected tauri-dev-x.y.z)"
+            exit 1
+          fi
+
+          BASE_VERSION="${BASH_REMATCH[1]}"
+          SEMVER="${BASE_VERSION}-dev.0"
+          SHORT_SHA="${SHA:0:7}"
+
+          echo "tag_name=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "semver=${SEMVER}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+          echo "Tag: ${TAG}"
+          echo "Semver: ${SEMVER}"
+          echo "Short SHA: ${SHORT_SHA}"
+
+  macos-dev:
+    needs: prepare
+    runs-on: macos-15-intel
+    env:
+      TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+      OVERRIDE_VERSION: ${{ needs.prepare.outputs.semver }}
+      SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v4
+        with:
+          repository: feiandxs/windword
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ env.TAG_NAME }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm --version
+          pnpm install --frozen-lockfile --config.store-dir=${{ env.PNPM_STORE_PATH }}
+
+      - name: Override TAURI dev version
+        shell: bash
+        run: |
+          set -euxo pipefail
+          node <<'NODE'
+          const fs = require('fs')
+          const path = require('path')
+
+          const appDir = process.env.APP_DIR
+          const version = process.env.OVERRIDE_VERSION
+          if (!appDir || !version) {
+            process.exit(1)
+          }
+
+          const packageJsonPath = path.join(process.cwd(), appDir, 'package.json')
+          const tauriConfPath = path.join(process.cwd(), appDir, 'src-tauri', 'tauri.conf.json')
+          const cargoTomlPath = path.join(process.cwd(), appDir, 'src-tauri', 'Cargo.toml')
+
+          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
+          packageJson.version = version
+          fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n')
+
+          const tauriConf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'))
+          tauriConf.version = version
+          fs.writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + '\n')
+
+          const cargoToml = fs.readFileSync(cargoTomlPath, 'utf8')
+          const nextCargoToml = cargoToml.replace(
+            /^version = ".*"$/m,
+            `version = "${version}"`
+          )
+
+          if (nextCargoToml === cargoToml) {
+            throw new Error('Failed to update version in Cargo.toml')
+          }
+
+          fs.writeFileSync(cargoTomlPath, nextCargoToml)
+          NODE
+
+      - name: Build TAURI dev bundle (macOS)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm --filter windword-tauri tauri build \
+            --config apps/windword-tauri/src-tauri/tauri.dev.conf.json \
+            --bundles app,dmg \
+            --no-sign \
+            --ci
+
+      - name: Collect macOS dev artifacts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p release
+
+          MAC_BUNDLE_DIR="${APP_DIR}/src-tauri/target/release/bundle/macos"
+          if [ ! -d "$MAC_BUNDLE_DIR" ]; then
+            echo "::error::Bundle directory does not exist: $MAC_BUNDLE_DIR"
+            exit 1
+          fi
+
+          APP_PATH=$(find "$MAC_BUNDLE_DIR" -maxdepth 1 -type d -name '*.app' -print -quit || true)
+          if [ -n "$APP_PATH" ]; then
+            APP_NAME="$(basename "${APP_PATH%.app}")"
+            ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "release/${APP_NAME}-${OVERRIDE_VERSION}.app.zip"
+          fi
+
+          find "$MAC_BUNDLE_DIR" -maxdepth 1 -type f \( \
+            -name '*.dmg' -o \
+            -name '*.zip' -o \
+            -name '*.tar.gz' -o \
+            -name '*.sig' \
+          \) -exec cp {} release/ \;
+
+          if [ -z "$(find release -maxdepth 1 -type f -print -quit)" ]; then
+            echo "::error::No TAURI dev artifacts collected"
+            exit 1
+          fi
+
+          ls -la release
+
+      - name: Upload TAURI dev artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-dev-macos
+          path: release
+
+  create-release:
+    needs:
+      - prepare
+      - macos-dev
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+      OVERRIDE_VERSION: ${{ needs.prepare.outputs.semver }}
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          set -euxo pipefail
+          RELEASE_TIME="$(date -u '+%Y-%m-%d %H:%M:%SZ')"
+          cat > release-notes.md <<EOF
+          ## Windword TAURI Dev ${TAG_NAME}
+
+          Release time (UTC): ${RELEASE_TIME}
+          Build version: ${OVERRIDE_VERSION}
+
+          ### Included artifacts
+          - macOS DEV bundle (unsigned)
+          EOF
+
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mapfile -t assets < <(find artifacts -type f | sort)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::No release assets found"
+            exit 1
+          fi
+
+          if gh release view "${TAG_NAME}" --repo ${{ github.repository }} >/dev/null 2>&1; then
+            gh release delete "${TAG_NAME}" --repo ${{ github.repository }} -y || true
+          fi
+
+          gh release create "${TAG_NAME}" "${assets[@]}" \
+            --repo ${{ github.repository }} \
+            --title "Windword TAURI Dev ${TAG_NAME}" \
+            --prerelease \
+            --notes-file release-notes.md
+
+  upload-to-r2:
+    needs:
+      - prepare
+      - create-release
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p artifacts
+          gh release download "$TAG_NAME" --repo ${{ github.repository }} -D artifacts
+
+      - name: Install AWS CLI
+        run: pip install awscli
+
+      - name: Upload TAURI dev assets to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PREFIX: ${{ secrets.R2_PREFIX }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -z "${R2_ENDPOINT:-}" ] || [ -z "${R2_BUCKET:-}" ]; then
+            echo "R2 secrets are incomplete, skipping upload"
+            exit 0
+          fi
+
+          PREFIX="${R2_PREFIX:-releases}"
+          DEST="s3://${R2_BUCKET}/${PREFIX}/tauri-dev/${TAG_NAME}"
+
+          for file in artifacts/*; do
+            if [ -f "$file" ]; then
+              filename=$(basename "$file")
+              echo "Uploading $filename to ${DEST}"
+              aws s3 cp "$file" "$DEST/$filename" --endpoint-url "$R2_ENDPOINT"
+            fi
+          done
