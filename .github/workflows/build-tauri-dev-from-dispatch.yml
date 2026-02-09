@@ -59,6 +59,11 @@ jobs:
       TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
       OVERRIDE_VERSION: ${{ needs.prepare.outputs.semver }}
       SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+      APPLE_CERTIFICATE: ${{ secrets.CSC_LINK_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - name: Checkout private repository
         uses: actions/checkout@v4
@@ -127,6 +132,21 @@ jobs:
           fs.writeFileSync(cargoTomlPath, nextCargoToml)
           NODE
 
+      - name: Verify signing and notarization environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for var in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!var:-}" ]; then
+              echo "::error::${var} is empty"
+              missing=1
+            else
+              echo "${var} is set"
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+
       - name: Build TAURI dev bundle (macOS)
         shell: bash
         run: |
@@ -134,9 +154,23 @@ jobs:
           pnpm --filter windword-tauri tauri build \
             --config src-tauri/tauri.dev.conf.json \
             --bundles app,dmg \
-            --no-sign \
             --ignore-version-mismatches \
             --ci
+
+      - name: Validate signature and notarization
+        shell: bash
+        run: |
+          set -euxo pipefail
+          MAC_BUNDLE_DIR="${APP_DIR}/src-tauri/target/release/bundle/macos"
+          APP_PATH=$(find "$MAC_BUNDLE_DIR" -maxdepth 1 -type d -name '*.app' -print -quit || true)
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::Unable to locate .app bundle under $MAC_BUNDLE_DIR"
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+          spctl --assess --type exec -vv "$APP_PATH"
 
       - name: Collect macOS dev artifacts
         shell: bash
@@ -207,7 +241,7 @@ jobs:
           Build version: ${OVERRIDE_VERSION}
 
           ### Included artifacts
-          - macOS DEV bundle (unsigned)
+          - macOS DEV bundle (signed + notarized)
           EOF
 
       - name: Create GitHub prerelease
