@@ -1,8 +1,8 @@
-name: Build Tauri Dev Release from Dispatch
+name: Build Tauri Release from Dispatch
 
 on:
   repository_dispatch:
-    types: [build-tauri-dev]
+    types: [build-tauri-release]
 
 permissions:
   contents: write
@@ -35,13 +35,12 @@ jobs:
             exit 1
           fi
 
-          if [[ ! "$TAG" =~ ^tauri-dev-([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            echo "::error::Unsupported tag format: $TAG (expected tauri-dev-x.y.z)"
+          if [[ ! "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Unsupported tag format: $TAG (expected vX.Y.Z)"
             exit 1
           fi
 
-          BASE_VERSION="${BASH_REMATCH[1]}"
-          SEMVER="${BASE_VERSION}-dev.0"
+          SEMVER="${BASH_REMATCH[1]}"
           SHORT_SHA="${SHA:0:7}"
 
           echo "tag_name=${TAG}" >> "$GITHUB_OUTPUT"
@@ -52,7 +51,7 @@ jobs:
           echo "Semver: ${SEMVER}"
           echo "Short SHA: ${SHORT_SHA}"
 
-  macos-dev:
+  macos-release:
     needs: prepare
     runs-on: macos-15-intel
     env:
@@ -135,7 +134,7 @@ jobs:
           pnpm --version
           pnpm install --frozen-lockfile --config.store-dir=${{ env.PNPM_STORE_PATH }}
 
-      - name: Override TAURI dev version
+      - name: Override TAURI release version
         shell: bash
         run: |
           set -euxo pipefail
@@ -224,12 +223,12 @@ jobs:
             codesign --verify --verbose=2 "$bin"
           done
 
-      - name: Build TAURI dev bundle (macOS)
+      - name: Build TAURI release bundle (macOS)
         shell: bash
         run: |
           set -euxo pipefail
           pnpm --filter windword-tauri tauri build \
-            --config src-tauri/tauri.dev.conf.json \
+            --config src-tauri/tauri.conf.json \
             --bundles app,dmg \
             --ignore-version-mismatches \
             --ci
@@ -249,7 +248,7 @@ jobs:
           xcrun stapler validate "$APP_PATH"
           spctl --assess --type exec -vv "$APP_PATH"
 
-      - name: Collect macOS dev artifacts
+      - name: Collect macOS release artifacts
         shell: bash
         run: |
           set -euxo pipefail
@@ -280,7 +279,7 @@ jobs:
           fi
 
           if [ -z "$(find release -maxdepth 1 -type f -print -quit)" ]; then
-            echo "::error::No TAURI dev artifacts collected"
+            echo "::error::No TAURI release artifacts collected"
             exit 1
           fi
 
@@ -303,7 +302,7 @@ jobs:
           cat > release/latest.json <<EOF
           {
             "version": "${OVERRIDE_VERSION}",
-            "notes": "Windword TAURI Dev ${TAG_NAME}",
+            "notes": "Windword ${TAG_NAME}",
             "pub_date": "${PUBLISHED_AT}",
             "platforms": {
               "darwin-x86_64": {
@@ -316,10 +315,10 @@ jobs:
 
           ls -la release
 
-      - name: Upload TAURI dev artifacts
+      - name: Upload TAURI release artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: tauri-dev-macos
+          name: tauri-release-macos
           path: release
 
       - name: Clean up signing keychain
@@ -333,7 +332,7 @@ jobs:
   create-release:
     needs:
       - prepare
-      - macos-dev
+      - macos-release
     runs-on: ubuntu-latest
     env:
       TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
@@ -350,18 +349,18 @@ jobs:
           set -euxo pipefail
           RELEASE_TIME="$(date -u '+%Y-%m-%d %H:%M:%SZ')"
           cat > release-notes.md <<EOF
-          ## Windword TAURI Dev ${TAG_NAME}
+          ## Windword TAURI ${TAG_NAME}
 
           Release time (UTC): ${RELEASE_TIME}
           Build version: ${OVERRIDE_VERSION}
 
           ### Included artifacts
-          - macOS DEV bundle (signed + notarized)
+          - macOS release bundle (signed + notarized)
           - updater package (.app.tar.gz + .sig)
           - updater manifest (latest.json)
           EOF
 
-      - name: Create GitHub prerelease
+      - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
@@ -380,53 +379,5 @@ jobs:
 
           gh release create "${TAG_NAME}" "${assets[@]}" \
             --repo ${{ github.repository }} \
-            --title "Windword TAURI Dev ${TAG_NAME}" \
-            --prerelease \
+            --title "Windword ${TAG_NAME}" \
             --notes-file release-notes.md
-
-  upload-to-r2:
-    needs:
-      - prepare
-      - create-release
-    runs-on: ubuntu-latest
-    env:
-      TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
-    steps:
-      - name: Download release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p artifacts
-          gh release download "$TAG_NAME" --repo ${{ github.repository }} -D artifacts
-
-      - name: Install AWS CLI
-        run: pip install awscli
-
-      - name: Upload TAURI dev assets to Cloudflare R2
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_BUCKET: ${{ secrets.R2_BUCKET }}
-          R2_PREFIX: ${{ secrets.R2_PREFIX }}
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ] || [ -z "${R2_ENDPOINT:-}" ] || [ -z "${R2_BUCKET:-}" ]; then
-            echo "R2 secrets are incomplete, skipping upload"
-            exit 0
-          fi
-
-          PREFIX="${R2_PREFIX:-releases}"
-          DEST="s3://${R2_BUCKET}/${PREFIX}/tauri-dev/${TAG_NAME}"
-
-          for file in artifacts/*; do
-            if [ -f "$file" ]; then
-              filename=$(basename "$file")
-              echo "Uploading $filename to ${DEST}"
-              aws s3 cp "$file" "$DEST/$filename" --endpoint-url "$R2_ENDPOINT"
-            fi
-          done
