@@ -30,8 +30,19 @@ jobs:
           set -euxo pipefail
           TAG="${{ github.event.client_payload.tag }}"
           SHA="${{ github.event.client_payload.sha }}"
+          VERSION="${{ github.event.client_payload.version }}"
+
+          if [[ -z "${TAG}" || -z "${SHA}" ]]; then
+            echo "::error::Dispatch payload must contain tag and sha"
+            exit 1
+          fi
+
           SHORT_SHA="${SHA:0:7}"
-          SEMVER="${TAG#v}"
+          if [[ -n "${VERSION}" ]]; then
+            SEMVER="${VERSION}"
+          else
+            SEMVER="${TAG#v}"
+          fi
 
           echo "tag_name=${TAG}" >> "$GITHUB_OUTPUT"
           echo "semver=${SEMVER}" >> "$GITHUB_OUTPUT"
