@@ -283,6 +283,16 @@ jobs:
             exit 1
           fi
 
+          # GitHub release assets normalize spaces in filenames; align names early
+          # so latest.json URL matches the final uploaded artifact URL exactly.
+          while IFS= read -r -d '' FILE_PATH; do
+            FILE_NAME="$(basename "$FILE_PATH")"
+            SANITIZED_NAME="${FILE_NAME// /.}"
+            if [ "$SANITIZED_NAME" != "$FILE_NAME" ]; then
+              mv "$FILE_PATH" "release/${SANITIZED_NAME}"
+            fi
+          done < <(find release -maxdepth 1 -type f -print0)
+
           UPDATER_PATH=$(find release -maxdepth 1 -type f -name '*.app.tar.gz' -print -quit || true)
           if [ -z "$UPDATER_PATH" ]; then
             echo "::error::Missing updater package (*.app.tar.gz)"
