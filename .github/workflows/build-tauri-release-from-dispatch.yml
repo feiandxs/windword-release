@@ -65,6 +65,8 @@ jobs:
       APPLE_ID: ${{ secrets.APPLE_ID }}
       APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - name: Checkout private repository
         uses: actions/checkout@v4
@@ -186,6 +188,22 @@ jobs:
           done
           if [ "$missing" -ne 0 ]; then exit 1; fi
 
+      - name: Verify updater signing environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is empty"
+            exit 1
+          fi
+
+          echo "TAURI_SIGNING_PRIVATE_KEY is set"
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is set"
+          else
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is empty (using unencrypted key)"
+          fi
+
       - name: Sign bundled resource binaries
         shell: bash
         run: |
@@ -265,6 +283,36 @@ jobs:
             exit 1
           fi
 
+          UPDATER_PATH=$(find release -maxdepth 1 -type f -name '*.app.tar.gz' -print -quit || true)
+          if [ -z "$UPDATER_PATH" ]; then
+            echo "::error::Missing updater package (*.app.tar.gz)"
+            exit 1
+          fi
+
+          UPDATER_SIG_PATH="${UPDATER_PATH}.sig"
+          if [ ! -f "$UPDATER_SIG_PATH" ]; then
+            echo "::error::Missing updater signature file: ${UPDATER_SIG_PATH}"
+            exit 1
+          fi
+
+          UPDATER_FILE_NAME="$(basename "$UPDATER_PATH")"
+          SIGNATURE="$(tr -d '\r\n' < "$UPDATER_SIG_PATH")"
+          PUBLISHED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+          cat > release/latest.json <<EOF
+          {
+            "version": "${OVERRIDE_VERSION}",
+            "notes": "Windword ${TAG_NAME}",
+            "pub_date": "${PUBLISHED_AT}",
+            "platforms": {
+              "darwin-x86_64": {
+                "signature": "${SIGNATURE}",
+                "url": "https://github.com/feiandxs/windword-release/releases/download/${TAG_NAME}/${UPDATER_FILE_NAME}"
+              }
+            }
+          }
+          EOF
+
           ls -la release
 
       - name: Upload TAURI release artifacts
@@ -308,6 +356,8 @@ jobs:
 
           ### Included artifacts
           - macOS release bundle (signed + notarized)
+          - updater package (.app.tar.gz + .sig)
+          - updater manifest (latest.json)
           EOF
 
       - name: Create GitHub release
