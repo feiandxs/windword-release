@@ -305,24 +305,6 @@ jobs:
             exit 1
           fi
 
-          UPDATER_FILE_NAME="$(basename "$UPDATER_PATH")"
-          SIGNATURE="$(tr -d '\r\n' < "$UPDATER_SIG_PATH")"
-          PUBLISHED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-
-          cat > release/latest.json <<EOF
-          {
-            "version": "${OVERRIDE_VERSION}",
-            "notes": "Windword TAURI Test ${TAG_NAME}",
-            "pub_date": "${PUBLISHED_AT}",
-            "platforms": {
-              "darwin-x86_64": {
-                "signature": "${SIGNATURE}",
-                "url": "https://github.com/feiandxs/windword-release/releases/download/${TAG_NAME}/${UPDATER_FILE_NAME}"
-              }
-            }
-          }
-          EOF
-
           ls -la release
 
       - name: Upload TAURI test artifacts
@@ -339,10 +321,185 @@ jobs:
             security delete-keychain "${KEYCHAIN_NAME}" || true
           fi
 
+  windows-test:
+    needs: prepare
+    runs-on: windows-latest
+    env:
+      TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+      OVERRIDE_VERSION: ${{ needs.prepare.outputs.semver }}
+      SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v4
+        with:
+          repository: feiandxs/windword
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ env.TAG_NAME }}
+
+      - name: Install NSIS and WiX
+        shell: pwsh
+        run: |
+          choco install nsis -y
+          choco install wixtoolset -y
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Configure pnpm for shorter paths
+        shell: bash
+        run: pnpm config set virtual-store-dir-max-length 70
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm --version
+          pnpm install --frozen-lockfile
+
+      - name: Override TAURI test version
+        shell: bash
+        run: |
+          set -euxo pipefail
+          node <<'NODE'
+          const fs = require('fs')
+          const path = require('path')
+
+          const appDir = process.env.APP_DIR
+          const version = process.env.OVERRIDE_VERSION
+          if (!appDir || !version) {
+            process.exit(1)
+          }
+
+          const packageJsonPath = path.join(process.cwd(), appDir, 'package.json')
+          const tauriConfPath = path.join(process.cwd(), appDir, 'src-tauri', 'tauri.conf.json')
+          const cargoTomlPath = path.join(process.cwd(), appDir, 'src-tauri', 'Cargo.toml')
+
+          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
+          packageJson.version = version
+          fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n')
+
+          const tauriConf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'))
+          tauriConf.version = version
+          fs.writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + '\n')
+
+          const cargoToml = fs.readFileSync(cargoTomlPath, 'utf8')
+          const nextCargoToml = cargoToml.replace(
+            /^version = ".*"$/m,
+            `version = "${version}"`
+          )
+
+          if (nextCargoToml === cargoToml) {
+            throw new Error('Failed to update version in Cargo.toml')
+          }
+
+          fs.writeFileSync(cargoTomlPath, nextCargoToml)
+          NODE
+
+      - name: Verify updater signing environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is empty"
+            exit 1
+          fi
+
+          echo "TAURI_SIGNING_PRIVATE_KEY is set"
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is set"
+          else
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is empty (using unencrypted key)"
+          fi
+
+      - name: Build TAURI test bundle (Windows)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm --filter windword-tauri tauri build \
+            --config src-tauri/tauri.conf.json \
+            --bundles nsis,msi \
+            --ignore-version-mismatches \
+            --ci
+
+      - name: Collect Windows test artifacts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p release
+
+          NSIS_BUNDLE_DIR="${APP_DIR}/src-tauri/target/release/bundle/nsis"
+          if [ -d "$NSIS_BUNDLE_DIR" ]; then
+            find "$NSIS_BUNDLE_DIR" -maxdepth 1 -type f \( \
+              -name '*.exe' -o \
+              -name '*.zip' -o \
+              -name '*.sig' \
+            \) -exec cp {} release/ \;
+          fi
+
+          MSI_BUNDLE_DIR="${APP_DIR}/src-tauri/target/release/bundle/msi"
+          if [ -d "$MSI_BUNDLE_DIR" ]; then
+            find "$MSI_BUNDLE_DIR" -maxdepth 1 -type f \( \
+              -name '*.msi' -o \
+              -name '*.zip' -o \
+              -name '*.sig' \
+            \) -exec cp {} release/ \;
+          fi
+
+          if [ -z "$(find release -maxdepth 1 -type f -print -quit)" ]; then
+            echo "::error::No TAURI Windows test artifacts collected"
+            exit 1
+          fi
+
+          while IFS= read -r -d '' FILE_PATH; do
+            FILE_NAME="$(basename "$FILE_PATH")"
+            SANITIZED_NAME="${FILE_NAME// /.}"
+            if [ "$SANITIZED_NAME" != "$FILE_NAME" ]; then
+              mv "$FILE_PATH" "release/${SANITIZED_NAME}"
+            fi
+          done < <(find release -maxdepth 1 -type f -print0)
+
+          WIN_UPDATER_PATH=$(find release -maxdepth 1 -type f -name '*.nsis.zip' -print -quit || true)
+          if [ -z "$WIN_UPDATER_PATH" ]; then
+            WIN_UPDATER_PATH=$(find release -maxdepth 1 -type f -name '*.msi.zip' -print -quit || true)
+          fi
+
+          if [ -z "$WIN_UPDATER_PATH" ]; then
+            echo "::error::Missing Windows updater package (*.nsis.zip or *.msi.zip)"
+            exit 1
+          fi
+
+          WIN_UPDATER_SIG_PATH="${WIN_UPDATER_PATH}.sig"
+          if [ ! -f "$WIN_UPDATER_SIG_PATH" ]; then
+            echo "::error::Missing Windows updater signature file: ${WIN_UPDATER_SIG_PATH}"
+            exit 1
+          fi
+
+          ls -la release
+
+      - name: Upload TAURI test artifacts (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-test-windows
+          path: release
+
   create-release:
     needs:
       - prepare
       - macos-test
+      - windows-test
     runs-on: ubuntu-latest
     env:
       TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
@@ -353,12 +510,71 @@ jobs:
         with:
           path: artifacts
 
+      - name: Generate updater manifest
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          MAC_UPDATER_PATH=$(find artifacts -type f -name '*.app.tar.gz' | sort | head -n 1 || true)
+          if [ -z "$MAC_UPDATER_PATH" ]; then
+            echo "::error::Missing macOS updater package (*.app.tar.gz)"
+            exit 1
+          fi
+
+          MAC_UPDATER_SIG_PATH="${MAC_UPDATER_PATH}.sig"
+          if [ ! -f "$MAC_UPDATER_SIG_PATH" ]; then
+            echo "::error::Missing macOS updater signature file: ${MAC_UPDATER_SIG_PATH}"
+            exit 1
+          fi
+
+          WIN_UPDATER_PATH=$(find artifacts -type f -name '*.nsis.zip' | sort | head -n 1 || true)
+          if [ -z "$WIN_UPDATER_PATH" ]; then
+            WIN_UPDATER_PATH=$(find artifacts -type f -name '*.msi.zip' | sort | head -n 1 || true)
+          fi
+
+          if [ -z "$WIN_UPDATER_PATH" ]; then
+            echo "::error::Missing Windows updater package (*.nsis.zip or *.msi.zip)"
+            exit 1
+          fi
+
+          WIN_UPDATER_SIG_PATH="${WIN_UPDATER_PATH}.sig"
+          if [ ! -f "$WIN_UPDATER_SIG_PATH" ]; then
+            echo "::error::Missing Windows updater signature file: ${WIN_UPDATER_SIG_PATH}"
+            exit 1
+          fi
+
+          MAC_UPDATER_FILE_NAME="$(basename "$MAC_UPDATER_PATH")"
+          WIN_UPDATER_FILE_NAME="$(basename "$WIN_UPDATER_PATH")"
+          MAC_SIGNATURE="$(tr -d '\r\n' < "$MAC_UPDATER_SIG_PATH")"
+          WIN_SIGNATURE="$(tr -d '\r\n' < "$WIN_UPDATER_SIG_PATH")"
+          PUBLISHED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+          cat > artifacts/latest.json <<EOF_JSON
+          {
+            "version": "${OVERRIDE_VERSION}",
+            "notes": "Windword TAURI Test ${TAG_NAME}",
+            "pub_date": "${PUBLISHED_AT}",
+            "platforms": {
+              "darwin-x86_64": {
+                "signature": "${MAC_SIGNATURE}",
+                "url": "https://github.com/feiandxs/windword-release/releases/download/${TAG_NAME}/${MAC_UPDATER_FILE_NAME}"
+              },
+              "windows-x86_64": {
+                "signature": "${WIN_SIGNATURE}",
+                "url": "https://github.com/feiandxs/windword-release/releases/download/${TAG_NAME}/${WIN_UPDATER_FILE_NAME}"
+              }
+            }
+          }
+          EOF_JSON
+
+          ls -la artifacts
+
       - name: Generate release notes
         shell: bash
         run: |
           set -euxo pipefail
           RELEASE_TIME="$(date -u '+%Y-%m-%d %H:%M:%SZ')"
-          cat > release-notes.md <<EOF
+          cat > release-notes.md <<EOF_NOTES
           ## Windword TAURI Test ${TAG_NAME}
 
           Release time (UTC): ${RELEASE_TIME}
@@ -366,9 +582,10 @@ jobs:
 
           ### Included artifacts
           - macOS test bundle (signed + notarized)
-          - updater package (.app.tar.gz + .sig)
+          - Windows x64 installers (NSIS .exe + MSI .msi, unsigned)
+          - updater packages (macOS .app.tar.gz/.sig, Windows .nsis.zip/.sig)
           - updater manifest (latest.json)
-          EOF
+          EOF_NOTES
 
       - name: Create GitHub prerelease
         env:
