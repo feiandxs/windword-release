@@ -1,0 +1,394 @@
+name: Build Tauri Test Release from Dispatch
+
+on:
+  repository_dispatch:
+    types: [build-tauri-test]
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: '20'
+  PNPM_VERSION: '9'
+  PNPM_STORE_PATH: ~/.pnpm-store
+  APP_DIR: apps/windword-tauri
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.meta.outputs.tag_name }}
+      semver: ${{ steps.meta.outputs.semver }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+    steps:
+      - name: Parse dispatch payload
+        id: meta
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          TAG="${{ github.event.client_payload.tag }}"
+          SHA="${{ github.event.client_payload.sha }}"
+
+          if [[ -z "$TAG" || -z "$SHA" ]]; then
+            echo "::error::Dispatch payload must contain tag and sha"
+            exit 1
+          fi
+
+          if [[ ! "$TAG" =~ ^tauri-test-([0-9]{8})(-([0-9]{6}))?$ ]]; then
+            echo "::error::Unsupported tag format: $TAG (expected tauri-test-YYYYMMDD or tauri-test-YYYYMMDD-HHMMSS)"
+            exit 1
+          fi
+
+          DATE_PART="${BASH_REMATCH[1]}"
+          TIME_PART="${BASH_REMATCH[3]:-000000}"
+          SEMVER="0.0.0-${DATE_PART}.${TIME_PART}"
+          SHORT_SHA="${SHA:0:7}"
+
+          echo "tag_name=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "semver=${SEMVER}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+          echo "Tag: ${TAG}"
+          echo "Semver: ${SEMVER}"
+          echo "Short SHA: ${SHORT_SHA}"
+
+  macos-test:
+    needs: prepare
+    runs-on: macos-15-intel
+    env:
+      TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+      OVERRIDE_VERSION: ${{ needs.prepare.outputs.semver }}
+      SHORT_SHA: ${{ needs.prepare.outputs.short_sha }}
+      CSC_LINK_BASE64: ${{ secrets.CSC_LINK_BASE64 }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_CERTIFICATE: ${{ secrets.CSC_LINK_BASE64 }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - name: Checkout private repository
+        uses: actions/checkout@v4
+        with:
+          repository: feiandxs/windword
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          ref: ${{ env.TAG_NAME }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: ${{ env.PNPM_VERSION }}
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Configure code signing keychain
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if [ -z "${CSC_LINK_BASE64}" ]; then
+            echo 'CSC_LINK_BASE64 secret is required for code signing' >&2
+            exit 1
+          fi
+          if [ -z "${CSC_KEY_PASSWORD}" ]; then
+            echo 'CSC_KEY_PASSWORD secret is required for code signing' >&2
+            exit 1
+          fi
+
+          CERT_PATH="$RUNNER_TEMP/windword-developer-id.p12"
+          KEYCHAIN_NAME="windword-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "::add-mask::${KEYCHAIN_PASSWORD}"
+
+          echo "${CSC_LINK_BASE64}" | base64 --decode > "${CERT_PATH}"
+          security delete-keychain "${KEYCHAIN_NAME}" 2>/dev/null || true
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_NAME}"
+          security set-keychain-settings "${KEYCHAIN_NAME}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_NAME}"
+          security import "${CERT_PATH}" -k "${KEYCHAIN_NAME}" -P "${CSC_KEY_PASSWORD}" -T /usr/bin/codesign -T /usr/bin/productsign
+          existing_keychains=$(security list-keychains -d user | sed 's/\"//g')
+          security list-keychains -d user -s "${KEYCHAIN_NAME}" ${existing_keychains}
+          security set-key-partition-list -S apple-tool:,apple: -s -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_NAME}"
+
+          SIGNING_IDENTITY=$(security find-identity -v -p codesigning "${KEYCHAIN_NAME}" | sed -n 's/.*\"\(Developer ID Application:.*\)\"/\1/p' | head -n 1)
+          if [ -z "${SIGNING_IDENTITY}" ]; then
+            echo "Unable to resolve Developer ID Application identity from ${KEYCHAIN_NAME}" >&2
+            exit 1
+          fi
+
+          echo "KEYCHAIN_NAME=${KEYCHAIN_NAME}" >> "${GITHUB_ENV}"
+          echo "KEYCHAIN_PASSWORD=${KEYCHAIN_PASSWORD}" >> "${GITHUB_ENV}"
+          echo "SIGNING_IDENTITY=${SIGNING_IDENTITY}" >> "${GITHUB_ENV}"
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm --version
+          pnpm install --frozen-lockfile --config.store-dir=${{ env.PNPM_STORE_PATH }}
+
+      - name: Override TAURI test version
+        shell: bash
+        run: |
+          set -euxo pipefail
+          node <<'NODE'
+          const fs = require('fs')
+          const path = require('path')
+
+          const appDir = process.env.APP_DIR
+          const version = process.env.OVERRIDE_VERSION
+          if (!appDir || !version) {
+            process.exit(1)
+          }
+
+          const packageJsonPath = path.join(process.cwd(), appDir, 'package.json')
+          const tauriConfPath = path.join(process.cwd(), appDir, 'src-tauri', 'tauri.conf.json')
+          const cargoTomlPath = path.join(process.cwd(), appDir, 'src-tauri', 'Cargo.toml')
+
+          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'))
+          packageJson.version = version
+          fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2) + '\n')
+
+          const tauriConf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'))
+          tauriConf.version = version
+          fs.writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + '\n')
+
+          const cargoToml = fs.readFileSync(cargoTomlPath, 'utf8')
+          const nextCargoToml = cargoToml.replace(
+            /^version = ".*"$/m,
+            `version = "${version}"`
+          )
+
+          if (nextCargoToml === cargoToml) {
+            throw new Error('Failed to update version in Cargo.toml')
+          }
+
+          fs.writeFileSync(cargoTomlPath, nextCargoToml)
+          NODE
+
+      - name: Verify signing and notarization environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for var in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!var:-}" ]; then
+              echo "::error::${var} is empty"
+              missing=1
+            else
+              echo "${var} is set"
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then exit 1; fi
+
+      - name: Verify updater signing environment
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is empty"
+            exit 1
+          fi
+
+          echo "TAURI_SIGNING_PRIVATE_KEY is set"
+          if [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is set"
+          else
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is empty (using unencrypted key)"
+          fi
+
+      - name: Sign bundled resource binaries
+        shell: bash
+        run: |
+          set -euxo pipefail
+          binaries=(
+            "${APP_DIR}/src-tauri/resources/audio-device/apple-audio-device-cli"
+            "${APP_DIR}/src-tauri/resources/system-audio/apple-audio-mute-cli"
+          )
+
+          for bin in "${binaries[@]}"; do
+            if [ ! -f "$bin" ]; then
+              echo "::error::Missing bundled binary: $bin"
+              exit 1
+            fi
+            chmod +x "$bin"
+            codesign --force --timestamp --options runtime --sign "${SIGNING_IDENTITY}" "$bin"
+            codesign --verify --verbose=2 "$bin"
+          done
+
+      - name: Build TAURI test bundle (macOS)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          pnpm --filter windword-tauri tauri build \
+            --config src-tauri/tauri.conf.json \
+            --bundles app,dmg \
+            --ignore-version-mismatches \
+            --ci
+
+      - name: Validate signature and notarization
+        shell: bash
+        run: |
+          set -euxo pipefail
+          MAC_BUNDLE_DIR="${APP_DIR}/src-tauri/target/release/bundle/macos"
+          APP_PATH=$(find "$MAC_BUNDLE_DIR" -maxdepth 1 -type d -name '*.app' -print -quit || true)
+          if [ -z "$APP_PATH" ]; then
+            echo "::error::Unable to locate .app bundle under $MAC_BUNDLE_DIR"
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+          spctl --assess --type exec -vv "$APP_PATH"
+
+      - name: Collect macOS test artifacts
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p release
+
+          MAC_BUNDLE_DIR="${APP_DIR}/src-tauri/target/release/bundle/macos"
+          if [ ! -d "$MAC_BUNDLE_DIR" ]; then
+            echo "::error::Bundle directory does not exist: $MAC_BUNDLE_DIR"
+            exit 1
+          fi
+
+          APP_PATH=$(find "$MAC_BUNDLE_DIR" -maxdepth 1 -type d -name '*.app' -print -quit || true)
+          if [ -n "$APP_PATH" ]; then
+            APP_NAME="$(basename "${APP_PATH%.app}")"
+            ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "release/${APP_NAME}-${OVERRIDE_VERSION}.app.zip"
+          fi
+
+          find "$MAC_BUNDLE_DIR" -maxdepth 1 -type f \( \
+            -name '*.dmg' -o \
+            -name '*.zip' -o \
+            -name '*.tar.gz' -o \
+            -name '*.sig' \
+          \) -exec cp {} release/ \;
+
+          DMG_BUNDLE_DIR="${APP_DIR}/src-tauri/target/release/bundle/dmg"
+          if [ -d "$DMG_BUNDLE_DIR" ]; then
+            find "$DMG_BUNDLE_DIR" -maxdepth 1 -type f -name '*.dmg' -exec cp {} release/ \;
+          fi
+
+          if [ -z "$(find release -maxdepth 1 -type f -print -quit)" ]; then
+            echo "::error::No TAURI test artifacts collected"
+            exit 1
+          fi
+
+          while IFS= read -r -d '' FILE_PATH; do
+            FILE_NAME="$(basename "$FILE_PATH")"
+            SANITIZED_NAME="${FILE_NAME// /.}"
+            if [ "$SANITIZED_NAME" != "$FILE_NAME" ]; then
+              mv "$FILE_PATH" "release/${SANITIZED_NAME}"
+            fi
+          done < <(find release -maxdepth 1 -type f -print0)
+
+          UPDATER_PATH=$(find release -maxdepth 1 -type f -name '*.app.tar.gz' -print -quit || true)
+          if [ -z "$UPDATER_PATH" ]; then
+            echo "::error::Missing updater package (*.app.tar.gz)"
+            exit 1
+          fi
+
+          UPDATER_SIG_PATH="${UPDATER_PATH}.sig"
+          if [ ! -f "$UPDATER_SIG_PATH" ]; then
+            echo "::error::Missing updater signature file: ${UPDATER_SIG_PATH}"
+            exit 1
+          fi
+
+          UPDATER_FILE_NAME="$(basename "$UPDATER_PATH")"
+          SIGNATURE="$(tr -d '\r\n' < "$UPDATER_SIG_PATH")"
+          PUBLISHED_AT="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+          cat > release/latest.json <<EOF
+          {
+            "version": "${OVERRIDE_VERSION}",
+            "notes": "Windword TAURI Test ${TAG_NAME}",
+            "pub_date": "${PUBLISHED_AT}",
+            "platforms": {
+              "darwin-x86_64": {
+                "signature": "${SIGNATURE}",
+                "url": "https://github.com/feiandxs/windword-release/releases/download/${TAG_NAME}/${UPDATER_FILE_NAME}"
+              }
+            }
+          }
+          EOF
+
+          ls -la release
+
+      - name: Upload TAURI test artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-test-macos
+          path: release
+
+      - name: Clean up signing keychain
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${KEYCHAIN_NAME:-}" ]; then
+            security delete-keychain "${KEYCHAIN_NAME}" || true
+          fi
+
+  create-release:
+    needs:
+      - prepare
+      - macos-test
+    runs-on: ubuntu-latest
+    env:
+      TAG_NAME: ${{ needs.prepare.outputs.tag_name }}
+      OVERRIDE_VERSION: ${{ needs.prepare.outputs.semver }}
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          set -euxo pipefail
+          RELEASE_TIME="$(date -u '+%Y-%m-%d %H:%M:%SZ')"
+          cat > release-notes.md <<EOF
+          ## Windword TAURI Test ${TAG_NAME}
+
+          Release time (UTC): ${RELEASE_TIME}
+          Build version: ${OVERRIDE_VERSION}
+
+          ### Included artifacts
+          - macOS test bundle (signed + notarized)
+          - updater package (.app.tar.gz + .sig)
+          - updater manifest (latest.json)
+          EOF
+
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          mapfile -t assets < <(find artifacts -type f | sort)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::No release assets found"
+            exit 1
+          fi
+
+          if gh release view "${TAG_NAME}" --repo ${{ github.repository }} >/dev/null 2>&1; then
+            gh release delete "${TAG_NAME}" --repo ${{ github.repository }} -y || true
+          fi
+
+          gh release create "${TAG_NAME}" "${assets[@]}" \
+            --repo ${{ github.repository }} \
+            --title "Windword TAURI Test ${TAG_NAME}" \
+            --prerelease \
+            --notes-file release-notes.md
