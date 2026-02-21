@@ -338,11 +338,10 @@ jobs:
           token: ${{ secrets.PRIVATE_REPO_PAT }}
           ref: ${{ env.TAG_NAME }}
 
-      - name: Install NSIS and WiX
+      - name: Install NSIS
         shell: pwsh
         run: |
           choco install nsis -y
-          choco install wixtoolset -y
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v3
@@ -430,7 +429,7 @@ jobs:
           set -euxo pipefail
           pnpm --filter windword-tauri tauri build \
             --config src-tauri/tauri.conf.json \
-            --bundles nsis,msi \
+            --bundles nsis \
             --ignore-version-mismatches \
             --ci
 
@@ -582,7 +581,7 @@ jobs:
 
           ### Included artifacts
           - macOS test bundle (signed + notarized)
-          - Windows x64 installers (NSIS .exe + MSI .msi, unsigned)
+          - Windows x64 installer (NSIS .exe, unsigned)
           - updater packages (macOS .app.tar.gz/.sig, Windows .nsis.zip/.sig)
           - updater manifest (latest.json)
           EOF_NOTES
