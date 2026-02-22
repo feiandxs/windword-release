@@ -420,9 +420,51 @@ jobs:
           set -euxo pipefail
           pnpm --filter windword-tauri tauri build \
             --config src-tauri/tauri.conf.json \
+            --config src-tauri/tauri.windows.conf.json \
             --bundles nsis,msi \
             --ignore-version-mismatches \
             --ci
+
+      - name: Validate NSIS package contains model DLLs
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          NSIS_BUNDLE_DIR="${APP_DIR}/src-tauri/target/release/bundle/nsis"
+          NSIS_SETUP_PATH=$(find "$NSIS_BUNDLE_DIR" -maxdepth 1 -type f -name '*-setup.exe' -print -quit || true)
+          if [ -z "$NSIS_SETUP_PATH" ]; then
+            echo "::error::Missing NSIS setup executable under $NSIS_BUNDLE_DIR"
+            exit 1
+          fi
+
+          SEVEN_ZIP_BIN=""
+          if command -v 7z >/dev/null 2>&1; then
+            SEVEN_ZIP_BIN="7z"
+          elif command -v 7z.exe >/dev/null 2>&1; then
+            SEVEN_ZIP_BIN="7z.exe"
+          else
+            echo "::error::7-Zip is required to inspect NSIS artifacts"
+            exit 1
+          fi
+
+          EXTRACT_DIR="$(mktemp -d)"
+          "$SEVEN_ZIP_BIN" x -y "-o$EXTRACT_DIR" "$NSIS_SETUP_PATH" >/dev/null
+
+          required_dlls=(
+            "onnxruntime.dll"
+            "onnxruntime_providers_shared.dll"
+            "sherpa-onnx-c-api.dll"
+            "sherpa-onnx-cxx-api.dll"
+          )
+
+          for dll in "${required_dlls[@]}"; do
+            if ! find "$EXTRACT_DIR" -type f -iname "$dll" -print -quit | grep -q .; then
+              echo "::error::NSIS setup is missing required DLL: $dll"
+              exit 1
+            fi
+          done
+
+          echo "NSIS setup contains all required model DLLs"
 
       - name: Collect Windows release artifacts
         shell: bash
@@ -461,19 +503,19 @@ jobs:
             fi
           done < <(find release -maxdepth 1 -type f -print0)
 
-          WIN_UPDATER_PATH=$(find release -maxdepth 1 -type f -name '*.nsis.zip' -print -quit || true)
+          WIN_UPDATER_PATH=$(find release -maxdepth 1 -type f -name '*.msi.zip' -print -quit || true)
           if [ -z "$WIN_UPDATER_PATH" ]; then
-            WIN_UPDATER_PATH=$(find release -maxdepth 1 -type f -name '*.msi.zip' -print -quit || true)
-          fi
-          if [ -z "$WIN_UPDATER_PATH" ]; then
-            WIN_UPDATER_PATH=$(find release -maxdepth 1 -type f -name '*-setup.exe' -print -quit || true)
+            WIN_UPDATER_PATH=$(find release -maxdepth 1 -type f -name '*.nsis.zip' -print -quit || true)
           fi
           if [ -z "$WIN_UPDATER_PATH" ]; then
             WIN_UPDATER_PATH=$(find release -maxdepth 1 -type f -name '*.msi' -print -quit || true)
           fi
+          if [ -z "$WIN_UPDATER_PATH" ]; then
+            WIN_UPDATER_PATH=$(find release -maxdepth 1 -type f -name '*-setup.exe' -print -quit || true)
+          fi
 
           if [ -z "$WIN_UPDATER_PATH" ]; then
-            echo "::error::Missing Windows updater package (*.nsis.zip, *.msi.zip, *-setup.exe, or *.msi)"
+            echo "::error::Missing Windows updater package (*.msi.zip, *.nsis.zip, *.msi, or *-setup.exe)"
             exit 1
           fi
 
@@ -523,19 +565,19 @@ jobs:
             exit 1
           fi
 
-          WIN_UPDATER_PATH=$(find artifacts -type f -name '*.nsis.zip' | sort | head -n 1 || true)
+          WIN_UPDATER_PATH=$(find artifacts -type f -name '*.msi.zip' | sort | head -n 1 || true)
           if [ -z "$WIN_UPDATER_PATH" ]; then
-            WIN_UPDATER_PATH=$(find artifacts -type f -name '*.msi.zip' | sort | head -n 1 || true)
-          fi
-          if [ -z "$WIN_UPDATER_PATH" ]; then
-            WIN_UPDATER_PATH=$(find artifacts -type f -name '*-setup.exe' | sort | head -n 1 || true)
+            WIN_UPDATER_PATH=$(find artifacts -type f -name '*.nsis.zip' | sort | head -n 1 || true)
           fi
           if [ -z "$WIN_UPDATER_PATH" ]; then
             WIN_UPDATER_PATH=$(find artifacts -type f -name '*.msi' | sort | head -n 1 || true)
           fi
+          if [ -z "$WIN_UPDATER_PATH" ]; then
+            WIN_UPDATER_PATH=$(find artifacts -type f -name '*-setup.exe' | sort | head -n 1 || true)
+          fi
 
           if [ -z "$WIN_UPDATER_PATH" ]; then
-            echo "::error::Missing Windows updater package (*.nsis.zip, *.msi.zip, *-setup.exe, or *.msi)"
+            echo "::error::Missing Windows updater package (*.msi.zip, *.nsis.zip, *.msi, or *-setup.exe)"
             exit 1
           fi
 
