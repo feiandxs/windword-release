@@ -161,16 +161,19 @@ jobs:
           fs.writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + '\n')
 
           const cargoToml = fs.readFileSync(cargoTomlPath, 'utf8')
+          const versionPattern = /^version = ".*"$/m
+          if (!versionPattern.test(cargoToml)) {
+            throw new Error('Failed to locate version field in Cargo.toml')
+          }
           const nextCargoToml = cargoToml.replace(
-            /^version = ".*"$/m,
+            versionPattern,
             `version = "${version}"`
           )
-
-          if (nextCargoToml === cargoToml) {
-            throw new Error('Failed to update version in Cargo.toml')
+          if (nextCargoToml !== cargoToml) {
+            fs.writeFileSync(cargoTomlPath, nextCargoToml)
+          } else {
+            console.log(`Cargo.toml already uses version ${version}`)
           }
-
-          fs.writeFileSync(cargoTomlPath, nextCargoToml)
           NODE
 
       - name: Verify signing and notarization environment
@@ -386,16 +389,19 @@ jobs:
           fs.writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + '\n')
 
           const cargoToml = fs.readFileSync(cargoTomlPath, 'utf8')
+          const versionPattern = /^version = ".*"$/m
+          if (!versionPattern.test(cargoToml)) {
+            throw new Error('Failed to locate version field in Cargo.toml')
+          }
           const nextCargoToml = cargoToml.replace(
-            /^version = ".*"$/m,
+            versionPattern,
             `version = "${version}"`
           )
-
-          if (nextCargoToml === cargoToml) {
-            throw new Error('Failed to update version in Cargo.toml')
+          if (nextCargoToml !== cargoToml) {
+            fs.writeFileSync(cargoTomlPath, nextCargoToml)
+          } else {
+            console.log(`Cargo.toml already uses version ${version}`)
           }
-
-          fs.writeFileSync(cargoTomlPath, nextCargoToml)
           NODE
 
       - name: Verify updater signing environment
