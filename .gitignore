@@ -6,3 +6,8 @@
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+# Local release artifact downloads
+/setup.exe
+/nsis.zip
+/msi
